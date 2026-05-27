@@ -6,6 +6,46 @@
 
 ---
 
+## 2026-05-27 — P011: Sprint debt cleanup (Tầng 2 — INV-12 + DISCOVERIES hook align)
+
+**Phiếu:** P011 (Tầng 2 — 2 items from "Open backlog" cleared; item 3 `fire_task` no-timeout deferred to separate Tầng 1 phiếu)
+
+**Item 1 — INV-12 label sanitization 2-point enforcement (code already in place):**
+- Task 0 anchor verification revealed that `src/core/register.rs::run` and `src/core/unregister.rs::run` already had full `is_valid_label` helpers + full ASCII alphanumeric + `-` + `_` allowlist enforcement in their pre-flights (committed during a prior sprint with no doc trail in BACKLOG.md or DISCOVERIES.md).
+- BACKLOG.md "Open backlog" debt item #1 was stale — INV-12 2-point enforcement was already in place.
+- P011 adds 3 explicit named unit tests in `src/core/register.rs::tests` covering the 3 specific invalid-label attack classes: whitespace (`"foo bar"`), path separator (`"foo/bar"`), and shell metachar (`"foo;rm"`). Each test asserts pre-flight rejection AND zero `LaunchctlClient` invocations (proving rejection occurs before any plist/launchctl call).
+- Defense-in-depth confirmed: `src/core/register.rs::is_valid_label` (point 1) + `src/launchd.rs::generate_plist` (point 2) + `src/mcp/tools.rs::validate_label` (point 3, INV-18).
+
+**Item 2 — DISCOVERIES.md hook format aligned with CLAUDE.md doctrine:**
+- `.git/hooks/pre-commit` line 137 regex updated: now accepts either legacy H2 header (`## ...P<NNN>`) OR CLAUDE.md doctrine list-item (`- YYYY-MM-DD P<NNN>:`). `grep -q` → `grep -Eq` (extended regex required for alternation).
+- Going forward Worker writes only the list-item form; existing P001-P010 dual-format entries continue to match via the legacy alternative.
+- Worker no longer needs to write both formats (1 source of truth per CLAUDE.md doctrine).
+- Manual validation confirmed: all P001-P010 entries match the new regex, P999 correctly rejected.
+
+**Tests:**
+- Baseline 141 → 144 (+3 new invalid-label attack-class tests for register pre-flight).
+- `src/core/unregister.rs` already had `run_rejects_invalid_label` test — no new tests needed there.
+
+**No INV change, no schema change, no dep change.**
+- INV-12 spec at INVARIANTS.md line 137-153 unchanged. INVARIANTS.md line 147 stale prose location reference (`cli/register.rs::run_with_deps` pre-P006) left as-is; logged in Discovery Report.
+
+**BACKLOG.md:** 2 debt items moved "Open backlog" → "Recently shipped"; item 3 (`fire_task` no process timeout) stays in "Open backlog".
+
+**Acceptance (all verified):**
+- `cargo build --release` — zero warnings
+- `cargo test --all` — 144/144 pass
+- `cargo clippy --all-targets -- -D warnings` — clean
+- `cargo fmt --check` — no diff
+- `bash -n .git/hooks/pre-commit` — exit 0 (syntax valid)
+- Hook regex P001-P010 validation — 10/10 OK; P999 correctly rejected
+- `git diff src/cli/mod.rs` — empty (Constraint #1)
+- `git diff src/alert.rs` — empty (Constraint #11)
+- `git diff src/heartbeat.rs` — empty (Constraint #12)
+- `git diff Cargo.toml` — empty (no dep change)
+- `git diff docs/ARCHITECTURE.md` — empty (Tầng 2)
+
+---
+
 ## 2026-05-27 — P010: Phase 2.3 — Crash-safe heartbeat (SPRINT COMPLETE)
 
 **Phiếu:** P010 (Tầng 1 — `heartbeat::append` atomic temp+fsync+rename protocol, `read_last_n` partial-last-line tolerance, INV-21 appended, `HeartbeatRecord` schema preserved, function signatures preserved)
