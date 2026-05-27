@@ -102,6 +102,77 @@
 
 ---
 
+### INV-10 — `launchctl` shell-out: absolute path args only, no user-string interpolation
+
+**Statement:** PR touching `RealLaunchctl::bootstrap` or `RealLaunchctl::bootout` (or any future `launchctl` invocation) MUST pass only pre-validated, pre-sanitized strings to `Command::new("launchctl").arg(...)`. No `Command::new("sh").arg("-c").arg(format!("launchctl ... {user_label}"))` style. Shell interpolation of user-controlled input is PROHIBITED.
+
+**Why:** `launchctl bootstrap gui/$UID <plist_path>` with an attacker-influenced path component could bootstrap arbitrary plists. advisory-cron accepts `--label` from the user; label sanitization (INV-12) is the first line of defense; no shell interpolation is the second.
+
+**Implementation (Phase 1.3):** `src/launchd.rs` `RealLaunchctl` uses `Command::new("launchctl").arg("bootstrap").arg(&domain).arg(plist_path)` — each arg passed separately, no shell expansion. `domain` is `format!("gui/{uid}")` where `uid` is a `u32` (numeric, not user-controlled). `plist_path` is composed via `plist_path_for` from sanitized label.
+
+**Trigger keywords:** `Command::new("sh")`, `.arg("-c")` combined with format strings containing user input, `std::process::Command` + `launchctl` in same expr.
+
+**Status:** Active.
+
+**Implemented in Giám sát:** No (project-local). Worker self-checks.
+
+---
+
+### INV-11 — `id -u` shell-out: result parsed as `u32`, no further interpolation
+
+**Statement:** PR using `current_uid()` or any equivalent `id -u` invocation MUST parse the result as a plain `u32` before use. The raw string output of `id -u` MUST NOT be interpolated into shell commands or file paths without parsing.
+
+**Why:** `id -u` output is expected to be a numeric UID string. Parsing to `u32` validates it is numeric and bounds-checked. Using the raw string could permit injection if (hypothetically) `id -u` were replaced or returns unexpected output.
+
+**Implementation (Phase 1.3):** `src/launchd.rs::current_uid()` → `s.parse::<u32>()` — result is `u32`. Usage in `RealLaunchctl` is `format!("gui/{uid}")` where `uid: u32` — no shell injection surface.
+
+**Trigger keywords:** `current_uid()` result used without `parse::<u32>()` step, or passed to `Command::new("sh").arg("-c")`.
+
+**Status:** Active.
+
+**Implemented in Giám sát:** No (project-local). Worker self-checks.
+
+---
+
+### INV-12 — Label sanitization: ASCII alphanumeric + `-` + `_` only; enforced at 2 points
+
+**Statement:** PR accepting a `--label` CLI argument MUST validate the label against the ASCII alphanumeric + `-` + `_` allowlist at BOTH of:
+1. Pre-flight check in `register::run` (before generating plist)
+2. Inside `generate_plist` (defense-in-depth)
+
+The label becomes part of a filesystem path (`~/Library/LaunchAgents/com.advisorycron.<label>.plist`) AND a launchd domain target string (`gui/<uid>/com.advisorycron.<label>`). Path traversal chars (`.`, `/`, `~`), shell meta-chars (`$`, `` ` ``, `&`, `;`), and whitespace are ALL PROHIBITED.
+
+**Why:** Without sanitization, a label like `../../etc/cron.d/evil` or `foo; rm -rf ~` would either write plists to unexpected locations or (if shell-interpolated) execute arbitrary commands.
+
+**Implementation (Phase 1.3):** `src/launchd.rs::generate_plist` — `label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')`. `src/cli/register.rs::run_with_deps` — early return exit 1 on empty label. Both checks active.
+
+**Trigger keywords:** new `--label` parsing, `generate_plist` call sites, `plist_path_for` call sites.
+
+**Status:** Active.
+
+**Implemented in Giám sát:** No (project-local). Worker self-checks.
+
+---
+
+### INV-13 — Plist write boundary: `~/Library/LaunchAgents/com.advisorycron.*.plist` only
+
+**Statement:** PR writing `.plist` files MUST write ONLY to `<launch_agents_dir>/com.advisorycron.<label>.plist` where `<launch_agents_dir>` defaults to `~/Library/LaunchAgents/` (or test-injected `TempDir`). Writing to:
+- `/Library/LaunchAgents/` (system-level) — PROHIBITED (requires root)
+- `/Library/LaunchDaemons/` (system daemons) — PROHIBITED (requires root)
+- Arbitrary user-controlled path — PROHIBITED (label must be sanitized via INV-12 before path composition)
+
+**Why:** System-level LaunchAgents/Daemons require root and can interfere with OS services. advisory-cron MUST stay user-scoped (`~/Library/LaunchAgents/`).
+
+**Implementation (Phase 1.3):** `src/launchd.rs::plist_path_for(label, launch_agents_dir)` composes path as `launch_agents_dir.join(format!("com.advisorycron.{label}.plist"))`. `launch_agents_dir` is always either `default_launch_agents_dir(&home)` (= `<home>/Library/LaunchAgents`) or test-injected `TempDir`. Label is pre-sanitized (INV-12). `fs::write` target is the composed path — no free-form path override from user input.
+
+**Trigger keywords:** `plist_path_for` call sites, `fs::write` + `.plist` extension, path containing `/Library/LaunchAgents/` or `/Library/LaunchDaemons/`.
+
+**Status:** Active. Supersedes the shorter INV-7 (kept for reference; INV-13 is the authoritative expanded version).
+
+**Implemented in Giám sát:** No (project-local). Worker self-checks.
+
+---
+
 ## How INV are checked
 
 1. Worker pushes PR.

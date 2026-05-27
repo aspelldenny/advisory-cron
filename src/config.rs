@@ -69,7 +69,6 @@ impl Config {
     /// per docs/ARCHITECTURE.md §CLI surface exit codes.
     ///
     /// Called by Phase 1.3 (`register`) and Phase 1.4 (`run`); forward-declared here.
-    #[allow(dead_code)]
     pub fn load(path: &Path) -> Result<Self> {
         let raw = fs::read_to_string(path)
             .with_context(|| format!("failed to read config at {}", path.display()))?;

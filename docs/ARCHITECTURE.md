@@ -35,8 +35,8 @@ Planned module layout for Phase 1. Worker may adjust per phiếu's spec (Archite
 | `src/main.rs` | clap-derive CLI entry point. Parses subcommand + dispatches to `cli::*` handlers. | 1.1 ✅ |
 | `src/cli/mod.rs` | Commands enum + dispatch fn routing to per-subcommand handlers. | 1.1 ✅ |
 | `src/cli/init.rs` | `advisory-cron init` — write default config to `~/.config/advisory-cron/config.toml`. Skeleton shipped 1.1; impl shipped 1.2. | 1.2 ✅ |
-| `src/cli/register.rs` | `advisory-cron register` — generate plist + `launchctl bootstrap`. Skeleton shipped 1.1; impl deferred to 1.3. | 1.1 skeleton ✅ → impl 1.3 |
-| `src/cli/unregister.rs` | `advisory-cron unregister` — `launchctl bootout` + remove plist. Skeleton shipped 1.1; impl deferred to 1.3. | 1.1 skeleton ✅ → impl 1.3 |
+| `src/cli/register.rs` | `advisory-cron register` — generate plist + `launchctl bootstrap`. Skeleton shipped 1.1; impl shipped 1.3. | 1.3 ✅ |
+| `src/cli/unregister.rs` | `advisory-cron unregister` — `launchctl bootout` + remove plist. Skeleton shipped 1.1; impl shipped 1.3. | 1.3 ✅ |
 | `src/cli/run.rs` | `advisory-cron run` — fire task once, write heartbeat. Skeleton shipped 1.1; impl deferred to 1.4. | 1.1 skeleton ✅ → impl 1.4 |
 | `src/cli/status.rs` | `advisory-cron status` — read launchd next-fire + last heartbeat. Skeleton shipped 1.1; impl deferred to 1.5. | 1.1 skeleton ✅ → impl 1.5 |
 | `src/cli/mcp.rs` | `advisory-cron mcp` — start MCP server over stdio (thin shell over `core::*`). | 1.7 |
@@ -44,7 +44,7 @@ Planned module layout for Phase 1. Worker may adjust per phiếu's spec (Archite
 | `src/mcp/server.rs` | MCP server bootstrap (handshake, transport, tool registry). SDK choice TBD by Architect (likely `rmcp`). | 1.7 |
 | `src/mcp/tools.rs` | 5 MCP tool definitions (input schema + handler → `core::*`). | 1.7 |
 | `src/config.rs` | TOML config schema (serde-derive). Validation on load. | 1.2 ✅ |
-| `src/launchd.rs` | Plist XML generation + `launchctl` shell invocation wrappers. macOS-only. | 1.3 |
+| `src/launchd.rs` | Plist XML generation + `launchctl` shell invocation wrappers. macOS-only. `LaunchctlClient` trait + `RealLaunchctl`/`NoopLaunchctl` impls + `current_uid()` helper. | 1.3 ✅ |
 | `src/runner.rs` | `tokio::process::Command` task spawn + capture stdout/stderr/exit. | 1.4 |
 | `src/heartbeat.rs` | JSONL append + read-last-N. | 1.4 |
 
@@ -59,8 +59,8 @@ Planned module layout for Phase 1. Worker may adjust per phiếu's spec (Archite
 | Subcommand | Args | Behavior | Phase |
 |------------|------|----------|-------|
 | `init` | `--force` (overwrite) | Write default config | 1.2 |
-| `register` | `--schedule <cron>` `--label <name>` | Generate + load plist | 1.3 |
-| `unregister` | `--label <name>` | Remove + unload plist | 1.3 |
+| `register` | `--schedule <cron>` (optional — overrides config; `M H * * *` daily form only) `--label <name>` `--config <path>` (optional — overrides default config path) | Generate + load plist | 1.3 ✅ |
+| `unregister` | `--label <name>` `--config <path>` (reserved, unused P003) | Remove + unload plist (idempotent) | 1.3 ✅ |
 | `run` | (no args) | Fire configured task once | 1.4 |
 | `status` | `--json` (machine output) | Show next fire + last heartbeat | 1.5 |
 | `mcp` | (no args — stdio only) | Start MCP server on stdin/stdout; serves 5 tools mirroring above | 1.7 |
@@ -177,10 +177,16 @@ Validation errors → exit code 2 per §CLI surface exit codes.
 
 Then `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.advisorycron.<label>.plist` registers it with the user session.
 
+**Cron → Calendar mapping (Phase 1 constraint):** `register --schedule` accepts only `M H * * *` daily form (all of day-of-month, month, day-of-week must be `*`). launchd uses `StartCalendarInterval` (Hour/Minute), not a crontab engine — complex expressions (ranges, lists, steps, day-of-week) are unsupported in Phase 1. Config-driven `[schedule]` with `hour`/`minute` calendar form has no such restriction.
+
 **Lifecycle:**
-- `register` writes plist + bootstraps
-- `unregister` `launchctl bootout gui/$UID <label>` + removes plist file
-- `status` `launchctl print gui/$UID/<label>` parses output for next fire time
+- `register` writes plist + bootstraps. Plist written BEFORE bootstrap attempt — if bootstrap fails, plist is left for user inspection.
+- `unregister` `launchctl bootout gui/$UID/com.advisorycron.<label>` + removes plist file. **Idempotent:** succeeds (exit 0) if label not loaded or plist already absent.
+- `status` `launchctl print gui/$UID/com.advisorycron.<label>` parses output for next fire time
+
+**UID resolution:** `launchctl` requires numeric UID (not `$UID` shell expansion). `src/launchd.rs::current_uid()` shells out `id -u` (zero-unsafe, zero-dep — Heads-up #5 Option B resolution).
+
+**Bootout idempotency note:** empirically verified (Anchor #17) — when label not loaded, `launchctl bootout` exits 3 with stdout `"Boot-out failed: 3: No such process"`. advisory-cron treats ANY non-zero launchctl exit as warn-continue (no substring branching).
 
 **Why launchd and not cron?** Sếp uses macOS. launchd is the native scheduler — handles sleep/wake, integrates with GUI session, doesn't need crontab editing. Linux support via systemd timer or cron deferred to Phase 3.
 
@@ -266,7 +272,7 @@ Error categories (anyhow context chain):
 
 ## Phase status
 
-- 🚧 **Phase 1** — In progress. Phase 1.1 shipped: CLI scaffold (5 subcommand stubs, clap derive). Phase 1.2 shipped: config schema (TOML + serde, `advisory-cron init` wired). Phases 1.3–1.7 pending.
+- 🚧 **Phase 1** — In progress. Phase 1.1 shipped: CLI scaffold (5 subcommand stubs, clap derive). Phase 1.2 shipped: config schema (TOML + serde, `advisory-cron init` wired). Phase 1.3 shipped: launchd plist generator + `register`/`unregister` handlers (newtype dispatch, LaunchctlClient trait, idempotent unregister, zero new dep). Phases 1.4–1.7 pending.
 - ⏸️ **Phase 2** — Deferred. Trigger: Phase 1 dogfood xanh 3 ngày.
 - ⏸️ **Phase 3** — Deferred. Trigger: Phase 2 ship + need Linux support.
 
