@@ -6,6 +6,28 @@
 
 ---
 
+## 2026-05-27 — P007: Phase 1.6 — README + ARCHITECTURE post-ship docs polish
+
+**Phiếu:** P007 (Tầng 2 — docs-only; no code changes)
+
+**Changes:**
+
+`README.md`:
+- CLI quick-start expanded from 4 steps to 6: added step 3 (`launchctl list | grep com.advisorycron`) as Sub-mechanism A trigger verification hint for Sếp dogfood; added step 6 (`advisory-cron unregister --label advisory-scan-daily`) for cleanup.
+- MCP smoke test snippet verified against live binary — output matches exactly (exit 0, `"serverInfo":{"name":"advisory-cron","version":"0.1.0"}`). No change needed.
+- New section "What advisory-cron fires" inserted before `## Status`: explains default `/advisory-scan` target + TOML example for custom task. Uses `<YOU>` placeholder (not hard-coded username).
+- Status banner updated to reflect Phase 1 complete, awaiting dogfood.
+
+`docs/ARCHITECTURE.md`:
+- §Modules "Layering invariant": "introduced Phase 1.7" → "shipped Phase 1.7" (reflects shipped reality).
+- §Phase status: "In progress (1.7 shipped; 1.6 docs remaining)" → "Code COMPLETE (all 7 sub-phases shipped). Awaiting Sếp dogfood 3 ngày..." + "Phase 1.6 shipped per P007".
+- §MCP surface Tool registry schemas: verified field-by-field against `src/mcp/tools.rs` source — all 5 tools match exactly. No drift. Table unchanged.
+- §Modules table: verified against `ls src/**/*.rs` — 22 rows, 22 files, all match. No phantom or missing entries.
+
+**Dogfood verification:** Worker ran all 6 README quick-start steps with `HOME=$(mktemp -d)`. All exit 0. Test label `p007-verify-temp-do-not-use` registered, confirmed in `launchctl list`, unregistered cleanly.
+
+---
+
 ## 2026-05-27 — P006: Phase 1.7 — MCP server wrapper (stdio) + core/* extraction
 
 **Phiếu:** P006 (Tầng 1 — new dep `rmcp 1.7.0` + `tokio io-std feature`, new modules `src/core/*` + `src/mcp/*` + `src/cli/mcp.rs`, new exit code 5, new INV-18, CLI/MCP dual-surface ship)
