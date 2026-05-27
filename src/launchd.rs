@@ -359,6 +359,7 @@ mod tests {
                 log_path: PathBuf::from("/Users/test/.local/state/advisory-cron/heartbeat.jsonl"),
             },
             alert: None,
+            retry: None,
         }
     }
 

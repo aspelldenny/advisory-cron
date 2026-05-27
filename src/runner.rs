@@ -77,6 +77,7 @@ mod tests {
                 log_path: PathBuf::from("/tmp/unused.jsonl"),
             },
             alert: None,
+            retry: None,
         }
     }
 

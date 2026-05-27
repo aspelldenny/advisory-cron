@@ -45,7 +45,7 @@ Planned module layout for Phase 1. Worker may adjust per phiếu's spec (Archite
 | `src/core/init.rs` | `run(InitArgs) -> Result<InitOutput>` — write default config. Resolves home via `home_dir()` internally. | 1.7 ✅ |
 | `src/core/register.rs` | `run(RegisterArgs, &L: LaunchctlClient) -> Result<RegisterOutput>` — generate plist + bootstrap. Resolves home + `launch_agents_dir` + `self_exe` internally. | 1.7 ✅ |
 | `src/core/unregister.rs` | `run(UnregisterArgs, &L: LaunchctlClient) -> Result<UnregisterOutput>` — bootout + remove plist. Idempotent. Resolves home internally. | 1.7 ✅ |
-| `src/core/run.rs` | `async run(RunArgs) -> Result<RunOutput>` — fire task once + write heartbeat. Full runner logic extracted from `cli/run.rs`. | 1.7 ✅ |
+| `src/core/run.rs` | `async run(RunArgs) -> Result<RunOutput>` — retry loop wraps `runner::fire_task` (Phase 2.2); 1 heartbeat per attempt; alert outside loop (1 max per invocation). Full runner logic extracted from `cli/run.rs`. | 1.7 ✅ + 2.2 retry ✅ |
 | `src/core/status.rs` | `run(StatusArgs, &L: LaunchctlClient) -> Result<StatusReport>` — launchd query + heartbeat read. `parse_next_fire` moved here from `cli/status.rs`. `StatusReport` pub (shared by CLI render + MCP serialize). | 1.7 ✅ |
 | `src/mcp/mod.rs` | Re-exports `server` and `tools` sub-modules. | 1.7 ✅ |
 | `src/mcp/server.rs` | `serve_stdio() -> Result<()>` — rmcp `ServerHandler::serve(stdio()).await` + `.waiting().await`. Converts SDK errors to `anyhow::Error`. | 1.7 ✅ |
@@ -56,7 +56,7 @@ Planned module layout for Phase 1. Worker may adjust per phiếu's spec (Archite
 | `src/heartbeat.rs` | JSONL append + read-last-N. `HeartbeatRecord` struct (durable schema). `tail_utf8` helper. | 1.4 ✅ |
 | `src/alert.rs` | `TelegramAlert::send_with_base` outbound POST to Telegram Bot API. Best-effort (alert fail ≠ task fail). Env-free module — the API base test-seam env var is read at the call site in `core::run::run`, NOT here. INV-19 boundary (10s timeout double-guard: reqwest client + `tokio::time::timeout`). `format_failure_message` centralises message format. | 2.1 ✅ |
 
-*(Phase 2.2 will add `src/retry.rs` for retry policy. Phase 2.3 adds crash-safe heartbeat write.)*
+*(Phase 2.2 ships retry policy inline in `src/core/run.rs` — no new module per P009 Architect decision. Phase 2.3 adds crash-safe heartbeat write.)*
 
 **Layering invariant (shipped Phase 1.7):** `core::*` knows nothing about CLI or MCP. `cli::*` and `mcp::*` are both thin adapters. A single code path = single behavior — `register` from CLI and `register` from MCP MUST produce identical plist + identical side effects.
 
@@ -118,6 +118,11 @@ chat_id = "1184530337"
 # Choose ONE of:
 bot_token_file = "~/.advisory-cron-secrets.env"  # path to KEY=VAL file with TG_BOT_TOKEN=...
 # bot_token = "8678210414:AAGN..."  # inline (less secure — config file must be chmod 600)
+
+# (Phase 2.2 — optional)
+[retry]
+max_attempts = 3        # 1 = no retry; ≥2 = retry up to (max_attempts - 1) times after initial failure
+backoff_secs = 30       # seconds to sleep between attempts (capped at 3600 by validate)
 ```
 
 ### Field reference
@@ -135,6 +140,8 @@ bot_token_file = "~/.advisory-cron-secrets.env"  # path to KEY=VAL file with TG_
 | `[alert.telegram]` | `chat_id` | `string` | yes (if block present) | Telegram chat ID (numeric string or `@channelname`) | — |
 | `[alert.telegram]` | `bot_token` | `string (one-of)` | one-of bot_token/bot_token_file | Inline bot token (config file should be chmod 600) | — |
 | `[alert.telegram]` | `bot_token_file` | `path (one-of)` | one-of bot_token/bot_token_file | Path to `KEY=VAL` file containing `TG_BOT_TOKEN=...` | — |
+| `[retry]` | `max_attempts` | `u32` | yes (if block present) | Max fire attempts per `run` invocation (≥1) | — |
+| `[retry]` | `backoff_secs` | `u64` | yes (if block present) | Seconds between attempts (0..=3600) | — |
 
 ### Schedule variants
 
@@ -284,6 +291,8 @@ Fields:
 
 **Schema versioning:** No version field in Phase 1. If we change schema in Phase 2 (adding `retry_attempt`, etc.), bump to add `schema_version: 1` + migration path.
 
+**Retry semantics (Phase 2.2):** when `[retry]` config is present and a task fires multiple times in one `advisory-cron run` invocation, EACH attempt produces ONE heartbeat JSONL line (with its own `ts`, `exit_code`, `duration_ms`). The schema does NOT carry a `retry_attempt` field — Phase 2.2 explicitly preserves the Phase 1.4 schema. `advisory-cron status --last N` naturally shows the per-attempt trail.
+
 ---
 
 ## Error handling + alerting
@@ -296,6 +305,20 @@ Phase 2 ships `src/alert.rs` (P008):
 - INV-19 boundary: 10s timeout (reqwest client + `tokio::time::timeout` outer guard), error returned to caller as `Result<()>`.
 - `alert.rs` is env-free; the test-only API base override env var is read at the call site in `core::run::run` and passed to `send_with_base(base, msg)`. This keeps `alert.rs` unit-testable in isolation.
 - Caller in `core::run::run` log-warn-continues on alert send error — alert failure does NOT fail the task. Heartbeat JSONL is the durable failure record; Telegram is the push channel.
+
+### Retry policy (Phase 2.2 — P009)
+
+When `[retry]` block is configured, `core::run::run` wraps `runner::fire_task` in a bounded loop:
+
+- Up to `max_attempts` total fires per `advisory-cron run` invocation
+- `tokio::time::sleep(backoff_secs)` between attempts (skip before first, skip after last)
+- `is_retryable(exit_code)`: retryable iff `exit_code ∈ 1..=127`. NOT retryable: `0` (success), `≥128` (signal-killed), `-1` (spawn-failure sentinel per INV-14)
+- 1 heartbeat JSONL line per attempt (schema unchanged from Phase 1.4)
+- Telegram alert fires AT MOST ONCE per invocation — after the loop, gated on final `exit_code != 0`. Successful retry → zero alerts. Exhausted retries → one alert. Signal-killed → one alert (immediate, no retry).
+
+INV-20 enforces all four rules: bounded attempts, backoff respected, signal-exits not retried, single-alert-per-invocation.
+
+When `[retry]` block is absent, behavior is Phase 2.1 single-fire (1 attempt, alert on fail) — backwards-compat preserved via `unwrap_or((1, 0))` default.
 
 Error categories (anyhow context chain):
 
@@ -311,7 +334,7 @@ Error categories (anyhow context chain):
 ## Phase status
 
 - ✅ **Phase 1** — Code COMPLETE (all 7 sub-phases shipped). Awaiting Sếp dogfood 3 ngày để close sprint per BACKLOG acceptance. Phase 1.1 shipped: CLI scaffold (5 subcommand stubs, clap derive). Phase 1.2 shipped: config schema (TOML + serde, `advisory-cron init` wired). Phase 1.3 shipped: launchd plist generator + `register`/`unregister` handlers (newtype dispatch, LaunchctlClient trait, idempotent unregister, zero new dep). Phase 1.4 shipped: task runner + heartbeat JSONL (`src/runner.rs` + `src/heartbeat.rs` + `run --config` flag wired; `serde_json` explicit dep; `task.label` optional config field). Phase 1.5 shipped: status reporter (`launchctl print` parsing of `descriptor` Hour/Minute → "daily at HH:MM"; heartbeat read-render; new CLI flags `--label / --config / --json / --last`; `LaunchctlClient` trait extended with `print`; INV-17 appended for `launchctl print` shell-out boundary). **Discovery (P005):** macOS 15 launchctl does NOT expose a "next fire" timestamp for `StartCalendarInterval` jobs — only configured recurrence via `descriptor = { "Hour" => N "Minute" => M }`. Acceptance gate satisfied via configured-recurrence rendering. Phase 1.7 shipped: MCP server wrapper (rmcp 1.7.0 stdio; `core::*` extraction for dual-surface parity; 5 tools; INV-18; 94 tests pass). Phase 1.6 (README + ARCHITECTURE docs polish) shipped per P007.
-- 🚧 **Phase 2** — In progress. Phase 2.1 (Telegram alert) shipped per P008. Phase 2.2 (retry) + 2.3 (state recovery) pending.
+- 🚧 **Phase 2** — In progress. Phase 2.1 (Telegram alert) shipped per P008. Phase 2.2 (retry policy) shipped per P009 (`is_retryable` private fn + retry loop in `core/run.rs`; 1 heartbeat per attempt schema preserved; alert moved OUTSIDE loop per INV-20 single-alert-per-invocation; `[retry]` opt-in config block). Phase 2.3 (state recovery) pending.
 - ⏸️ **Phase 3** — Deferred. Trigger: Phase 2 ship + need Linux support.
 
 *(Worker updates this section at end of each phase EXECUTE — Tầng 2 status text.)*

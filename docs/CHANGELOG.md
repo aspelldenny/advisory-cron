@@ -6,6 +6,58 @@
 
 ---
 
+## 2026-05-27 — P009: Phase 2.2 — Retry policy
+
+**Phiếu:** P009 (Tầng 1 — `[retry]` config block, retry loop in `core::run::run`, INV-20 appended, heartbeat schema preserved, alert call moved OUTSIDE loop)
+
+**Config schema (src/config.rs):**
+- Added `RetryConfig { max_attempts: u32, backoff_secs: u64 }`.
+- `Config` gains `#[serde(default)] pub retry: Option<RetryConfig>` — old configs (Phase 1 + P008) without `[retry]` block deserialize as `None` (backwards-compat preserved).
+- `Config::validate()` extended: `max_attempts ≥ 1`, `backoff_secs ≤ 3600` (sanity cap).
+- `Config::default_for_home` does NOT include retry block — opt-in.
+
+**Wiring (src/core/run.rs):**
+- New private fn `is_retryable(exit_code: i32) -> bool` — `(1..=127).contains(&exit_code)` per BACKLOG Phase 2.2 spec.
+- Retry loop wraps `runner::fire_task` + `heartbeat::append` for up to `max_attempts` iterations.
+- Two-match heartbeat-completeness invariant (Constraint #12 / INV-15 adjacent): `match &fire_result` (borrow, build HeartbeatRecord) → `heartbeat::append` → `match fire_result` (consume, extract tuple). Spawn-fail iterations still write a heartbeat with exit_code=-1.
+- Between attempts: `tokio::time::sleep(Duration::from_secs(backoff_secs)).await`.
+- Loop exits early on: success (exit 0), non-retryable (signal-killed ≥128 or spawn-fail -1), exhausted attempts.
+- P008 alert block MOVED from inside single-fire body to AFTER loop — fires AT MOST ONCE per `run` invocation, gated on final `exit_code != 0`. INV-20 single-alert-per-invocation invariant.
+- When `[retry]` absent: `unwrap_or((1, 0))` → single-fire Phase 2.1 behavior preserved (1 attempt, alert on fail).
+
+**Heartbeat schema unchanged:**
+- 1 JSONL line per attempt (3 retries = 3 lines). `HeartbeatRecord` struct in `src/heartbeat.rs` untouched (verified via `git diff src/heartbeat.rs` empty). `advisory-cron status --last N` naturally shows per-attempt trail.
+
+**INVARIANTS.md:**
+- INV-20 appended (4 sub-rules: bounded attempts DOS prevention, backoff respected no busy loop, signal exits not retried, single alert per invocation).
+
+**No new dep:**
+- `tokio::time::sleep` + `std::time::Duration` already pulled by `tokio` feature `time` (P008 Anchor #6).
+- `wiremock` dev-dep from P008 sufficient for integration test.
+
+**Tests (+17 new, total 133):**
+- `src/config.rs` unit tests (5): load_without_retry_block (backwards-compat), load_with_retry_block, validate_retry_zero_attempts, validate_retry_excessive_backoff, load_with_retry_and_alert.
+- `src/core/run.rs` unit tests (8): is_retryable boundaries (exit 1, 127, 0, 128, 130, 137, 143, -1).
+- `tests/cli_run_retry.rs` integration (4): retry_succeeds_on_attempt_2_no_alert, retry_exhausts_max_attempts_single_alert, signal_exit_not_retried_single_attempt, no_retry_block_preserves_phase21_single_fire.
+- All P008 + Phase 1 baseline tests preserved (116 → 133).
+
+**Docs updated (Tầng 1):**
+- `docs/ARCHITECTURE.md` — §Modules `core/run.rs` row Purpose updated; comment after table updated (no new `src/retry.rs` module); §Heartbeat schema retry semantics paragraph added; §Config schema TOML block + Field reference rows for `[retry]`; new §Error handling subsection "Retry policy (Phase 2.2)"; §Phase status Phase 2.2 shipped.
+- `docs/security/INVARIANTS.md` — INV-20 appended.
+- `README.md` — Phase 2.2 section with `[retry]` config snippet.
+
+**Acceptance (all ✅):**
+- `cargo build --release` — zero warnings, binary 3.9MB (≤7MB budget)
+- `cargo test --all` — 133/133 pass (116 baseline + 17 new)
+- `cargo clippy --all-targets -- -D warnings` — clean
+- `cargo fmt --check` — no diff
+- `git diff src/cli/mod.rs` — empty (Constraint #1 re-instated, honored)
+- `git diff src/heartbeat.rs` — empty (schema preserved)
+- `git diff src/alert.rs` — empty (Constraint #11 alert.rs env-free preserved)
+- `git diff src/runner.rs` — empty (runner stays single-fire primitive)
+
+---
+
 ## 2026-05-27 — P008: Phase 2.1 — Telegram alert on task failure
 
 **Phiếu:** P008 (Tầng 1 — new module `src/alert.rs`, config schema extension, `core::run` wired, INV-19, dev-dep `wiremock`)
