@@ -29,6 +29,38 @@
 
 ---
 
+## 2026-05-27 — Pre-flight: secrets + env prep (no code)
+
+Sếp batched all "nguyên liệu" before opening P001 so the sprint can run end-to-end without mid-flight blocks.
+
+**Audit results (toolchain):**
+- ✅ Claude Code CLI `/Users/nguyenhuuanh/.local/bin/claude` v2.1.152
+- ✅ Claude Desktop installed + config at `~/Library/Application Support/Claude/claude_desktop_config.json`
+- ✅ docs-gate + ship CLI at `~/.cargo/bin/`
+- ✅ Rust 1.94.1 (MSRV 1.85 satisfied)
+- ✅ gh CLI logged in as `aspelldenny` via keyring
+- ✅ launchctl available (Darwin Bootstrapper 7.0.0)
+
+**Secrets staged (outside repo, gitignored defense-in-depth):**
+- `~/.advisory-cron-secrets.env` chmod 600 — `TG_BOT_TOKEN` + `TG_BOT_USERNAME=chiha_alert_bot` + `TG_CHAT_ID=1184530337`
+- End-to-end verified: `curl ... sendMessage` returned `ok:True message_id:21`
+- Bot reused from Soulsign project (not advisory-cron exclusive) — Sếp accepted shared-bot risk
+
+**Shell env cleanup (`~/.zshrc`):**
+- Line 21: `export GITHUB_TOKEN="gho_s1lB..."` → commented out (OAuth, was shadowed)
+- Line 341: `export GITHUB_TOKEN=ghp_59Zq...` → commented out (invalid per `gh auth status`)
+- `gh` CLI continues to work via keyring; clean shell test (`env -i ... zsh -i -c`) shows `GITHUB_TOKEN: (unset)`
+- Current Claude Code session env still carries old value (inherited at spawn) — Sếp `exec zsh` or open new terminal to flush
+
+**Sếp acknowledged risk:** plaintext tokens (TG + 2 GitHub) appeared in chat output; Sếp's threat model = Claude Code session is private → accepted. Recommend rotation at end of cycle.
+
+**Pre-req status for sprint:**
+- Phase 1.1–1.7: ✅ all green, no external input pending
+- Phase 2.1: ✅ secrets ready (BACKLOG entry updated)
+- Phase 2.2–2.3, Phase 3+: no external input needed
+
+---
+
 ## 2026-05-27 — Bootstrap (seed)
 
 **Repo initialized.** `cargo new` Phase 0 scaffold + sos-kit doctrine seed by orchestrator (running from tarot main session 2026-05-27).

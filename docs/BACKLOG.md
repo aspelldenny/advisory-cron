@@ -36,7 +36,7 @@
 > **Trigger:** Phase 1 dogfood xanh 3 ngày liên tiếp.
 > **Theme:** Resilience — fail-loud surface to Sếp's phone + retry transient errors.
 
-- [ ] **Phase 2.1** — Telegram bot webhook POST on fail. Config `[alert.telegram]` block (bot_token, chat_id). Test with mock HTTP server.
+- [ ] **Phase 2.1** — Telegram bot webhook POST on fail. Config `[alert.telegram]` block (bot_token, chat_id). Test with mock HTTP server. **Pre-req: ✅ secrets ready** at `~/.advisory-cron-secrets.env` chmod 600 (bot `@chiha_alert_bot`, chat_id `1184530337`, end-to-end test confirmed 2026-05-27 message_id=21).
 - [ ] **Phase 2.2** — Retry policy. Config `[retry]` block (max_attempts, backoff_secs). Re-fire on transient failure (exit code 1-127 retryable; SIGTERM/SIGKILL not).
 - [ ] **Phase 2.3** — State recovery. Crash-safe heartbeat write (write + fsync + rename). Recovery on next fire if previous run interrupted mid-write.
 
