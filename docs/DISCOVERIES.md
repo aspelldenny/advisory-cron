@@ -6,6 +6,10 @@
 
 ---
 
+## P010 — Crash-safe heartbeat (Phase 2.3) shipped 2026-05-27 — SPRINT COMPLETE
+
+- 2026-05-27 P010: Crash-safe heartbeat Phase 2.3 shipped (temp+fsync+rename atomic protocol in `append`; `read_last_n` last-line-tolerate + mid-file-fail-loud; INV-21; tempfile dev→runtime; 8 new tests; 141 total; binary 3.9MB; sprint closes — Phase 1+2 all 10 phiếu shipped) → see docs/discoveries/P010.md
+
 ## P009 — Retry policy (Phase 2.2) shipped 2026-05-27
 
 - 2026-05-27 P009: Retry policy Phase 2.2 shipped (RetryConfig + Config::retry field; is_retryable(exit_code) private fn; for-loop retry in core/run.rs; two-match heartbeat-completeness invariant preserved; alert moved outside loop (1 per invocation INV-20); heartbeat schema unchanged; 133 tests; 3.9MB binary; runner.rs test helper only structural change) → see docs/discoveries/P009.md

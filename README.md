@@ -148,9 +148,17 @@ backoff_secs = 30       # seconds between attempts (0..=3600)
 - Exit codes 1-127 are retryable; signal-killed (≥128) and spawn-failures (-1) are NOT retried
 - Without a `[retry]` block, behavior is single-fire (Phase 2.1 baseline)
 
+## Phase 2.3 — Crash-safe heartbeat (state recovery)
+
+Every heartbeat write is atomic — `advisory-cron` cannot leave a corrupt or truncated JSONL line in the heartbeat file, even if killed mid-write (OOM, `launchctl kill`, power loss). Each `append` uses the POSIX `temp+fsync+rename` protocol: write to a temp file in the same directory, `fsync`, then atomic rename over the target. If interrupted before the rename, the temp file is auto-cleaned and the target is untouched.
+
+The read path (`advisory-cron status`) tolerates ONE legacy partial line at the end of the file (from a pre-Phase-2.3 binary that may have crashed mid-write) — it logs a warning and skips that line, returning the prior records. Corruption anywhere except the very last line fails loud (per PROJECT.md hard line #5).
+
+No config change required — Phase 2.3 is fully transparent. Existing heartbeat files (and any pre-2.3 partial-write damage at their tail) read cleanly.
+
 ## Status
 
-Phase 1 complete + Phase 2.1 (Telegram alert) + Phase 2.2 (retry policy) shipped. Track progress in [`docs/BACKLOG.md`](docs/BACKLOG.md).
+Phase 1 + Phase 2 COMPLETE (all 10 phiếu shipped). Track progress in [`docs/BACKLOG.md`](docs/BACKLOG.md).
 
 ## License
 

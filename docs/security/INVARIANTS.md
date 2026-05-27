@@ -315,6 +315,34 @@ The label becomes part of a filesystem path (`~/Library/LaunchAgents/com.advisor
 
 ---
 
+### INV-21 — Heartbeat append crash-safety: temp+fsync+rename atomic protocol, partial-last-line read tolerance
+
+**Statement:** PR introducing or modifying heartbeat write logic in `src/heartbeat.rs::append` (or any future heartbeat write path) MUST satisfy ALL of:
+
+1. **Atomic write protocol (temp+fsync+rename):** `append` MUST NOT use `OpenOptions::append(true)` + direct `write_all` against the target heartbeat file. Instead: read existing contents → build new buffer (existing + new line) in memory → write buffer to a `tempfile::NamedTempFile` created via `NamedTempFile::new_in(parent_dir_of_target)` (REQUIRED — atomic rename only works on the same filesystem; cross-filesystem rename is a copy+delete that loses atomicity) → call `temp.as_file().sync_all()` (fsync data + metadata, durable across power loss) → call `temp.persist(target_path)` (atomic `std::fs::rename` under the hood; POSIX guarantees same-fs rename appears as a single atomic act to other observers). If ANY step fails before `persist`, the temp file MUST be auto-cleaned (NamedTempFile's `Drop` impl handles this — Worker MUST NOT bypass via `mem::forget` or manual unlink suppression).
+
+2. **Partial-last-line read tolerance:** `read_last_n` (and any future heartbeat-read consumer) MUST tolerate ONE corrupt or truncated line at the END of the file by `tracing::warn!`-ing + skipping the line + continuing to return the prior parsed records. This handles legacy partial-write damage from pre-INV-21 heartbeat files (and defends against the edge case where a Phase 1.4 / pre-P010 binary version wrote the file). A parse failure on ANY line OTHER than the last MUST propagate as `Err` — mid-file corruption is impossible under the atomic-write protocol and indicates external tampering or disk damage that must surface loud (PROJECT.md hard line #5).
+
+3. **Schema preserved across the boundary:** `HeartbeatRecord` struct fields (ts, label, exit_code, duration_ms, stdout_tail, stderr_tail per Phase 1.4 + ARCHITECTURE.md §Heartbeat schema) MUST be unchanged by any crash-safety refactor. The atomicity boundary is a write-mechanism upgrade, NOT a schema upgrade. Adding fields (e.g. `schema_version`, `crash_marker`) requires a separate phiếu.
+
+4. **`append` function signature preserved:** `pub fn append(log_path: &Path, record: &HeartbeatRecord) -> Result<()>`. Callers (`core::run::run` at exactly one call site per P009 Constraint #12) MUST NOT need source modification when the implementation switches to the atomic protocol. The signature is a public contract since P004.
+
+**Why:** Heartbeat JSONL is the durable observability record advisory-cron exists to produce (PROJECT.md vision). A corrupt or partial JSONL line silently breaks the `status --last N` reader and Sếp's dogfood loop. P009's retry policy triples the crash-surface area (3+ writes per `run` invocation). Without atomic writes, every retry attempt is an independent corruption opportunity. The cost of the atomic protocol (read existing → write to temp → fsync → rename) is microseconds at Sếp's expected usage (~1 fire/day, ~365 KB/year). The cost of NOT having it is undebuggable silent data loss in the exact failure scenarios where the heartbeat is most needed.
+
+**Why `temp+fsync+rename` instead of `fsync-append` (O_APPEND + fsync):** POSIX guarantees O_APPEND writes ≤ `PIPE_BUF` (typically 4 KiB) are atomic, but this depends on platform/filesystem and degrades silently when records exceed the limit (e.g. large `stderr_tail` with high JSON escape expansion). Atomic rename is a hard POSIX guarantee independent of size. Conservative posture for a sprint-closing fault-tolerance phiếu.
+
+**Implementation (Phase 2.3):** `src/heartbeat.rs::append` — `tempfile::NamedTempFile::new_in(parent)` + `write_all` + `as_file().sync_all()` + `persist(target)`. `src/heartbeat.rs::read_last_n` — parse loop with last-line `match ... Err if idx == last_idx => warn+skip`. Both functions keep their P004 signatures unchanged.
+
+**Trust boundary:** Atomic rename is filesystem-level — no new process boundary, no new external service. Same-filesystem constraint enforced by Worker creating the temp file in `log_path.parent()` (not `std::env::temp_dir()` — that is a different fs on many setups and would silently demote the rename to a copy+delete). User config controls `heartbeat.log_path` (INV-15) — atomicity holds regardless of which directory the user picks, as long as that directory and its parent are on the same filesystem (default `~/.local/state/advisory-cron/` satisfies this trivially).
+
+**Trigger keywords:** `OpenOptions::append` + heartbeat file paths (forbidden in new code — must use temp+rename); `std::fs::rename` near heartbeat code (allowed only via `tempfile::NamedTempFile::persist`); new heartbeat writers outside `src/heartbeat.rs`; modifications to `HeartbeatRecord` struct (would require schema-version handling separately).
+
+**Status:** Active.
+
+**Implemented in Giám sát:** No (project-local). Worker self-checks during EXECUTE (unit tests for atomic-write protocol + corrupt-last-line tolerance). Giám sát soi PR diff for heartbeat-related changes; if PR reintroduces `OpenOptions::append(true)` against a heartbeat path OR removes the `tempfile::persist` call, flag as INV-21 violation.
+
+---
+
 ## How INV are checked
 
 1. Worker pushes PR.
