@@ -6,6 +6,48 @@
 
 ---
 
+## 2026-05-27 — P001: Phase 1.1 — Scaffold + CLI surface (clap derive)
+
+**Phiếu:** P001 (Tầng 1 — defines CLI contract for entire tool)
+
+**Modules added:**
+- `src/cli/mod.rs` — `Commands` enum (5 subcommands) + `dispatch()` fn
+- `src/cli/init.rs` — `init` stub with `--force` arg
+- `src/cli/register.rs` — `register` stub with `--schedule` + `--label` args
+- `src/cli/unregister.rs` — `unregister` stub with `--label` arg
+- `src/cli/run.rs` — `run` stub (no args)
+- `src/cli/status.rs` — `status` stub with `--json` arg
+
+**src/main.rs rewritten:**
+- clap derive `Cli` struct with `#[command(subcommand)]`
+- `#[tokio::main(flavor = "current_thread")]` (current_thread flavor, matching `rt` feature in Cargo.toml — see Discovery P001 for detail)
+- `ExitCode::from(u8)` return for clean stdio flush
+- Dispatches via `cli::dispatch()`, maps `Err` → exit 1 with `{err:#}` to stderr
+
+**CLI surface (5 stubs):**
+- Each stub returns `bail!("not yet implemented (Phase 1.x)")` → exit 1
+- `--help` for all 5 subcommands exits 0 and shows correct arg docs
+- `--version` prints `advisory-cron 0.1.0`
+
+**Tests added:**
+- `tests/cli_help.rs` — 3 integration tests (top-level help, per-sub help, unknown sub exits nonzero)
+- All 3 pass: `cargo test --all` clean
+
+**Layering decision:**
+- `src/core/` NOT created (defer until Phase 1.2 has real logic to host — anti-completeness-bias decision from Architect)
+- `src/cli/mod.rs` is the only parent; no intermediate abstraction needed for 5-stub phase
+
+**Discovery note:**
+- Cargo.toml had tokio `rt` feature but not `rt-multi-thread`. Phiếu spec used bare `#[tokio::main]` (defaults to multi-thread). Fixed to `#[tokio::main(flavor = "current_thread")]` — zero dep change, behavior identical for stub CLI.
+
+**Acceptance (all ✅):**
+- `cargo build --release` — zero warnings
+- `cargo test --all` — 3/3 pass
+- `cargo clippy --all-targets -- -D warnings` — clean
+- `cargo fmt --check` — no diff
+
+---
+
 ## 2026-05-27 — Phase 1 scope expansion: CLI + MCP dual surface
 
 **Trigger:** Sếp re-defined Phase 1 ship-gate. "Tool rust phải gói thành MCP và CLI mới là hoàn thành." → CLI-only Phase 1 insufficient; MCP server (stdio) must ship in same wave.
