@@ -23,9 +23,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 reqwest = { version = "0.12", features = ["rustls-tls", "json"], default-features = false }
 serde_json = "1"
 rmcp = { version = "1.7.0", features = ["server", "transport-io"] }
+tempfile = "3" # P010: runtime use for atomic heartbeat write (was dev-dep only pre-P010)
 
 [dev-dependencies]
-tempfile = "3"
 tokio-test = "0.4"
 wiremock = "0.6"
 

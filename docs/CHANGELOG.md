@@ -6,6 +6,90 @@
 
 ---
 
+## 2026-05-27 — P010: Phase 2.3 — Crash-safe heartbeat (SPRINT COMPLETE)
+
+**Phiếu:** P010 (Tầng 1 — `heartbeat::append` atomic temp+fsync+rename protocol, `read_last_n` partial-last-line tolerance, INV-21 appended, `HeartbeatRecord` schema preserved, function signatures preserved)
+
+**Heartbeat write (src/heartbeat.rs::append):**
+- Replaced Phase 1.4 direct `OpenOptions::append(true)` + write with atomic-rename protocol.
+- Steps: read existing file → append new line in-memory buffer → write to `tempfile::NamedTempFile::new_in(parent_dir)` → `sync_all()` (fsync) → `persist(target)` (atomic `std::fs::rename`).
+- Function signature `pub fn append(log_path: &Path, record: &HeartbeatRecord) -> Result<()>` UNCHANGED — single call site in `core::run::run` (P009 Constraint #12) preserved.
+- If any step before rename fails, NamedTempFile's Drop auto-cleans the temp file; target file untouched. Caller continues to log-warn-continue on `Err` per P004 contract.
+
+**Heartbeat read (src/heartbeat.rs::read_last_n):**
+- **Tightened** prior P004 silent-skip-all-malformed behavior. Now: last-line parse failure → `tracing::warn!` + skip + return prior records; mid-file parse failure → propagate as `Err` (was silently swallowed pre-P010; unexpected under atomic protocol; must surface loud per PROJECT.md hard line #5).
+- `eprintln!` replaced with `tracing::warn!` (INV-13 compliance).
+- Blank lines tolerated silently anywhere (preserved).
+- Existing test `read_last_n_skips_malformed_line` updated — mid-file corrupt line scenario flipped from skip-assertion to `is_err`-assertion (V2 semantic flip per INV-21 sub-rule 2).
+- Function signature `pub fn read_last_n(log_path: &Path, n: usize) -> Result<Vec<HeartbeatRecord>>` UNCHANGED.
+- Stale `#[allow(dead_code)]` attribute removed.
+- **Caller-side note:** `src/core/status.rs:80` calls `read_last_n(...).unwrap_or_default()`, silently absorbing the new mid-file `Err` into empty Vec at the status output. Pre-existing P005/P006-era design choice; NOT in P010 scope; future BACKLOG candidate for caller-side hardening. See Discovery.
+
+**Schema preserved:**
+- `HeartbeatRecord` fields (ts, label, exit_code, duration_ms, stdout_tail, stderr_tail) UNCHANGED since P004.
+- No `schema_version` bump, no new fields, no migration required for existing heartbeat files.
+
+**Cargo.toml:**
+- `tempfile = "3"` moved from `[dev-dependencies]` to `[dependencies]` (was already in lock file per P004 — zero compile time / binary size delta).
+- No other dep changes.
+
+**INVARIANTS.md:**
+- INV-21 appended (4 sub-rules: atomic temp+fsync+rename protocol, partial-last-line read tolerance, schema preservation, signature preservation).
+
+**Tests (+8 new, total 141):**
+- `src/heartbeat.rs::tests` unit (8 new): append_creates_file_when_missing, append_preserves_existing_content, append_multiple_times_grows_file_monotonically, append_leaves_no_temp_file_in_parent_dir, read_last_n_with_corrupt_last_line_skips_it_and_returns_prior, read_last_n_with_corrupt_mid_line_fails_loud, read_last_n_returns_empty_on_missing_file, read_last_n_skips_blank_lines_silently.
+- 1 existing test updated (`read_last_n_skips_malformed_line` — semantic flip to mid-file → Err per INV-21 sub-rule 2).
+- All P009 + Phase 1 baseline tests preserved (133 → 141 net).
+
+**Docs updated (Tầng 1):**
+- `docs/ARCHITECTURE.md` — §Modules row `src/heartbeat.rs` updated (atomic + tolerance); new §Heartbeat schema "Atomicity (Phase 2.3 — P010)" subsection; §Phase status Phase 2 marked COMPLETE.
+- `docs/security/INVARIANTS.md` — INV-21 appended (total: 21 invariants).
+- `README.md` — Phase 2.3 paragraph appended after Phase 2.2 retry section; Status updated to "Phase 1 + Phase 2 COMPLETE".
+
+**Acceptance (all verified):**
+- `cargo build --release` — zero warnings, binary ≤7MB
+- `cargo test --all` — 141/141 pass
+- `cargo clippy --all-targets -- -D warnings` — clean
+- `cargo fmt --check` — no diff
+- `git diff src/cli/mod.rs` — empty (Constraint #1)
+- `git diff src/core/run.rs` — empty (Constraint #2)
+- `git diff src/core/status.rs` — empty (V2 KHÔNG sửa)
+- `git diff src/alert.rs` — empty (Constraint #8)
+- `grep -c "heartbeat::append" src/core/run.rs` — exactly 1 (Constraint #12)
+- `grep "eprintln!" src/heartbeat.rs` — ZERO hits (V2 INV-13)
+- `grep "NamedTempFile::new_in" src/heartbeat.rs` — 1 hit (Constraint #14)
+- `grep -c "^### INV-" docs/security/INVARIANTS.md` — exactly 21
+
+---
+
+### Sprint summary — Phase 1 + Phase 2 COMPLETE (P001-P010, 2026-05-27)
+
+**10 phiếu shipped over the sprint:**
+
+| Phiếu | Phase | Theme |
+|-------|-------|-------|
+| P001 | 1.1 | CLI scaffold (5 subcommand stubs, clap derive) |
+| P002 | 1.2 | Config schema (TOML + serde) |
+| P003 | 1.3 | launchd plist + register/unregister |
+| P004 | 1.4 | Task runner + heartbeat JSONL |
+| P005 | 1.5 | Status reporter |
+| P006 | 1.7 | MCP server wrapper + `core::*` extraction (dual-surface parity) |
+| P007 | 1.6 | README + ARCHITECTURE post-ship polish |
+| P008 | 2.1 | Telegram alert on task failure |
+| P009 | 2.2 | Retry policy (`is_retryable` + retry loop, single-alert-per-invocation) |
+| P010 | 2.3 | Crash-safe heartbeat (temp+fsync+rename atomic protocol) |
+
+**Cumulative state:**
+- Binary size: ~3.9 MB release (well under 7 MB budget).
+- Test count: 141 (8 added by P010).
+- INVARIANTS: 21 (INV-1..21).
+- DISCOVERIES: 10 per-phiếu reports.
+- Both CLI surface (5 subcommands) and MCP surface (5 tools via stdio) ship with full parity per layering invariant.
+
+Sprint closes per BACKLOG.md acceptance pending: Sếp dogfood 3 ngày liên tiếp confirmation of `/advisory-scan` daily fire + at least 1 Claude Desktop MCP tool invocation.
+
+---
+
 ## 2026-05-27 — P009: Phase 2.2 — Retry policy
 
 **Phiếu:** P009 (Tầng 1 — `[retry]` config block, retry loop in `core::run::run`, INV-20 appended, heartbeat schema preserved, alert call moved OUTSIDE loop)

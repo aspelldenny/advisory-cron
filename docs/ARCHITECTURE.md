@@ -53,7 +53,7 @@ Planned module layout for Phase 1. Worker may adjust per phiếu's spec (Archite
 | `src/config.rs` | TOML config schema (serde-derive). Validation on load. | 1.2 ✅ |
 | `src/launchd.rs` | Plist XML generation + `launchctl` shell invocation wrappers. macOS-only. `LaunchctlClient` trait + `RealLaunchctl`/`NoopLaunchctl` impls + `current_uid()` helper. Extended P005: `LaunchctlClient::print` method + `LaunchctlPrintOutput` struct (status reporter). `parse_next_fire` moved to `src/core/status.rs` in P006. | 1.3 ✅ → 1.5 ✅ |
 | `src/runner.rs` | `tokio::process::Command` task spawn + capture stdout/stderr/exit. `RunResult` struct. | 1.4 ✅ |
-| `src/heartbeat.rs` | JSONL append + read-last-N. `HeartbeatRecord` struct (durable schema). `tail_utf8` helper. | 1.4 ✅ |
+| `src/heartbeat.rs` | JSONL atomic append (temp+fsync+rename per INV-21) + read-last-N with partial-last-line tolerance. `HeartbeatRecord` struct (durable schema, unchanged since P004). `tail_utf8` helper. | 1.4 ✅ + 2.3 crash-safe ✅ |
 | `src/alert.rs` | `TelegramAlert::send_with_base` outbound POST to Telegram Bot API. Best-effort (alert fail ≠ task fail). Env-free module — the API base test-seam env var is read at the call site in `core::run::run`, NOT here. INV-19 boundary (10s timeout double-guard: reqwest client + `tokio::time::timeout`). `format_failure_message` centralises message format. | 2.1 ✅ |
 
 *(Phase 2.2 ships retry policy inline in `src/core/run.rs` — no new module per P009 Architect decision. Phase 2.3 adds crash-safe heartbeat write.)*
@@ -293,6 +293,26 @@ Fields:
 
 **Retry semantics (Phase 2.2):** when `[retry]` config is present and a task fires multiple times in one `advisory-cron run` invocation, EACH attempt produces ONE heartbeat JSONL line (with its own `ts`, `exit_code`, `duration_ms`). The schema does NOT carry a `retry_attempt` field — Phase 2.2 explicitly preserves the Phase 1.4 schema. `advisory-cron status --last N` naturally shows the per-attempt trail.
 
+### Atomicity (Phase 2.3 — P010)
+
+`heartbeat::append` uses a **temp+fsync+rename** protocol to guarantee that each call is crash-safe: the heartbeat file at any moment observable to another process is either the file as it was BEFORE the call, or the file as it would be after the call's full success. There is no observable partial state.
+
+Protocol (per call):
+1. Read existing heartbeat file contents into memory (empty if file missing).
+2. Append the new JSONL line (with trailing `\n`) to the in-memory buffer.
+3. Create a `NamedTempFile` in the **same directory** as the target heartbeat file (required — atomic rename only works on the same filesystem).
+4. Write the full buffer to the temp file.
+5. `fsync` the temp file via `sync_all()` (data + metadata — file size durable across power loss).
+6. Atomically rename the temp file over the target via `NamedTempFile::persist(target)` (POSIX `rename(2)` — atomic on same-fs).
+
+If any step before the rename fails, the temp file is auto-cleaned via `Drop`; the target file is untouched. The caller (`core::run::run`) log-warn-continues on `Err` per P004 contract — task is NOT failed on heartbeat write failure.
+
+`heartbeat::read_last_n` tolerates ONE corrupt or truncated trailing line (likely from a pre-P010 interrupted write): `tracing::warn!` + skip. Corruption at any line OTHER than the last propagates as `Err` — mid-file corruption is impossible under the atomic-write protocol and must surface loud per PROJECT.md hard line #5.
+
+Trade-off: atomic-rename rewrites the entire heartbeat file on every append. At Sếp's expected usage (1 fire/day, ~1 KB/day, ~365 KB/year), the per-append cost is microseconds. INV-21 documents the boundary in full.
+
+**Why not `fsync-append` (O_APPEND + fsync)?** POSIX guarantees only writes ≤ `PIPE_BUF` (typically 4 KiB) are atomic with O_APPEND. Heartbeat records are usually well under this, but large `stderr_tail` content with high JSON-escape expansion could exceed it silently. Atomic rename is a hard POSIX guarantee independent of size — conservative choice for a fault-tolerance phiếu.
+
 ---
 
 ## Error handling + alerting
@@ -334,7 +354,7 @@ Error categories (anyhow context chain):
 ## Phase status
 
 - ✅ **Phase 1** — Code COMPLETE (all 7 sub-phases shipped). Awaiting Sếp dogfood 3 ngày để close sprint per BACKLOG acceptance. Phase 1.1 shipped: CLI scaffold (5 subcommand stubs, clap derive). Phase 1.2 shipped: config schema (TOML + serde, `advisory-cron init` wired). Phase 1.3 shipped: launchd plist generator + `register`/`unregister` handlers (newtype dispatch, LaunchctlClient trait, idempotent unregister, zero new dep). Phase 1.4 shipped: task runner + heartbeat JSONL (`src/runner.rs` + `src/heartbeat.rs` + `run --config` flag wired; `serde_json` explicit dep; `task.label` optional config field). Phase 1.5 shipped: status reporter (`launchctl print` parsing of `descriptor` Hour/Minute → "daily at HH:MM"; heartbeat read-render; new CLI flags `--label / --config / --json / --last`; `LaunchctlClient` trait extended with `print`; INV-17 appended for `launchctl print` shell-out boundary). **Discovery (P005):** macOS 15 launchctl does NOT expose a "next fire" timestamp for `StartCalendarInterval` jobs — only configured recurrence via `descriptor = { "Hour" => N "Minute" => M }`. Acceptance gate satisfied via configured-recurrence rendering. Phase 1.7 shipped: MCP server wrapper (rmcp 1.7.0 stdio; `core::*` extraction for dual-surface parity; 5 tools; INV-18; 94 tests pass). Phase 1.6 (README + ARCHITECTURE docs polish) shipped per P007.
-- 🚧 **Phase 2** — In progress. Phase 2.1 (Telegram alert) shipped per P008. Phase 2.2 (retry policy) shipped per P009 (`is_retryable` private fn + retry loop in `core/run.rs`; 1 heartbeat per attempt schema preserved; alert moved OUTSIDE loop per INV-20 single-alert-per-invocation; `[retry]` opt-in config block). Phase 2.3 (state recovery) pending.
-- ⏸️ **Phase 3** — Deferred. Trigger: Phase 2 ship + need Linux support.
+- ✅ **Phase 2** — COMPLETE. Phase 2.1 (Telegram alert) shipped per P008. Phase 2.2 (retry policy) shipped per P009 (`is_retryable` private fn + retry loop in `core/run.rs`; 1 heartbeat per attempt schema preserved; alert moved OUTSIDE loop per INV-20 single-alert-per-invocation; `[retry]` opt-in config block). Phase 2.3 (state recovery) shipped per P010 (heartbeat `append` refactored to temp+fsync+rename atomic protocol; `read_last_n` tolerates corrupt last line; INV-21 added; no schema change). **All 10 phiếu of the sprint shipped — sprint closes 2026-05-27.**
+- ⏸️ **Phase 3** — Deferred. Trigger: Phase 2 ship complete (now), need Linux support, OR Sếp picks from "Open backlog" debt items.
 
 *(Worker updates this section at end of each phase EXECUTE — Tầng 2 status text.)*
