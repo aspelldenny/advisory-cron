@@ -52,7 +52,8 @@
 
 ## 💡 Open backlog (chưa thuộc sprint)
 
-(empty — populate via `/idea` skill or direct edit during dogfood)
+- **[DEBT] INV-12 label sanitization 2-point enforcement** (from PR#3 security review advisory note 2026-05-27). Project-local INV-12 spec requires sanitization at 2 points (pre-flight in `register::run_with_deps` + inside `generate_plist`). Current state: full ASCII allowlist enforced only in `generate_plist`; `register::run_with_deps` checks only `args.label.is_empty()`. Tầng 2 fix — add full allowlist check in pre-flight to restore defense-in-depth.
+- **[DEBT] DISCOVERIES.md hook vs CLAUDE.md format mismatch** (from P001 worker escalation 2026-05-27). Pre-commit hook expects `## P<NNN>` h2 header; CLAUDE.md doctrine says list item `- 2026-MM-DD P<NNN>: ...`. Worker has been writing both. Tầng 2 docs cleanup — pick one + align hook/doctrine. 
 
 ---
 
