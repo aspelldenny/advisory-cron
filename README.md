@@ -105,9 +105,37 @@ log_path = "/Users/<YOU>/.local/state/advisory-cron/heartbeat.jsonl"
 
 Re-register after editing: `advisory-cron unregister --label my-task && advisory-cron register --label my-task`.
 
+## Phase 2.1 — Telegram alert on failure (optional)
+
+When a task fails (`exit_code != 0`), advisory-cron can POST to a Telegram bot so you see the failure on your phone without checking the heartbeat log.
+
+Add to your config file (`~/.config/advisory-cron/config.toml`):
+
+```toml
+[alert.telegram]
+chat_id = "<your chat id>"
+bot_token_file = "~/.advisory-cron-secrets.env"  # KEY=VAL file with TG_BOT_TOKEN=...
+```
+
+Create the secrets file `~/.advisory-cron-secrets.env` (chmod 600):
+
+```
+TG_BOT_TOKEN=<token from @BotFather>
+```
+
+Alternatively, inline the token (config file must be chmod 600):
+
+```toml
+[alert.telegram]
+chat_id = "<your chat id>"
+bot_token = "<token from @BotFather>"
+```
+
+Alert is best-effort: a network blip will not fail the task. The heartbeat JSONL remains the durable failure record. INV-19 governs the alert HTTP boundary (10s timeout, log-warn-not-bail).
+
 ## Status
 
-Phase 1 complete — CLI + MCP wrapper (stdio) shipped; awaiting Sếp dogfood. Track progress in [`docs/BACKLOG.md`](docs/BACKLOG.md).
+Phase 1 complete + Phase 2.1 (Telegram alert) shipped. Track progress in [`docs/BACKLOG.md`](docs/BACKLOG.md).
 
 ## License
 

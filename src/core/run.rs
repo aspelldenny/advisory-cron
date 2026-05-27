@@ -89,6 +89,43 @@ pub async fn run(args: RunArgs) -> Result<RunOutput> {
         ),
     };
 
+    // Phase 2.1 — Telegram alert on fail (best-effort, INV-19 boundary).
+    // Insertion point V2 (Option A): AFTER `match fire_result` (all vars in scope),
+    // BEFORE `Ok(RunOutput)` return.
+    if exit_code != 0
+        && let Some(alert_cfg) = config.alert.as_ref().and_then(|a| a.telegram.as_ref())
+    {
+        match crate::alert::TelegramAlert::from_config(Some(alert_cfg)) {
+            Ok(Some(alert)) => {
+                // Env-var-at-call-site (V2 — Worker Turn 1 recommendation, Architect ACCEPT).
+                // `ADVISORY_CRON_TG_API_BASE` is a TEST-ONLY seam. Production: env var
+                // unset → default base. `alert.rs` itself stays env-free for
+                // unit-testability (INV-19 §Implementation).
+                let api_base = std::env::var("ADVISORY_CRON_TG_API_BASE")
+                    .unwrap_or_else(|_| "https://api.telegram.org".to_string());
+                let msg = crate::alert::format_failure_message(
+                    &label,       // bound from line 44
+                    exit_code,    // bound from match fire_result
+                    duration_ms,  // bound from match fire_result
+                    &stderr_tail, // bound from match fire_result
+                );
+                if let Err(e) = alert.send_with_base(&api_base, &msg).await {
+                    tracing::warn!(
+                        error = %e,
+                        "telegram alert send failed (best-effort, swallowing)"
+                    );
+                }
+            }
+            Ok(None) => {} // unreachable given outer Some check, but defensive
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "telegram alert config invalid (best-effort, swallowing)"
+                );
+            }
+        }
+    }
+
     Ok(RunOutput {
         exit_code,
         duration_ms,

@@ -6,6 +6,48 @@
 
 ---
 
+## 2026-05-27 — P008: Phase 2.1 — Telegram alert on task failure
+
+**Phiếu:** P008 (Tầng 1 — new module `src/alert.rs`, config schema extension, `core::run` wired, INV-19, dev-dep `wiremock`)
+
+**New module:**
+- `src/alert.rs` — `TelegramAlert` with `from_config`, `send_with_base(api_base, msg)` (10s timeout: reqwest client + `tokio::time::timeout` double guard per INV-19). Env-free module: the API base test-seam env var is read at the call site in `core::run::run`, NOT inside `alert.rs`, keeping the module unit-testable without env setup. `format_failure_message` centralises message formatting (label + exit_code + duration_ms + stderr_tail with 500-byte UTF-8 truncation). `read_token_from_file` parses `KEY=VAL` lines extracting `TG_BOT_TOKEN=...`.
+
+**Config schema (src/config.rs):**
+- Added `AlertConfig { telegram: Option<TelegramConfig> }` + `TelegramConfig { chat_id, bot_token, bot_token_file }`.
+- `Config` gains `#[serde(default)] pub alert: Option<AlertConfig>` — old configs without `[alert]` block deserialize as `None` (backwards-compat preserved).
+- `Config::validate()` extended: chat_id non-empty, bot_token/bot_token_file mutually exclusive (not both, not neither), bot_token non-empty if set.
+- `Config::default_for_home` does NOT include alert block — alert is opt-in.
+
+**Wiring (src/core/run.rs):**
+- After `match fire_result` block (exit_code, stderr_tail, duration_ms in scope), before `Ok(RunOutput)` return: on `exit_code != 0` + `config.alert.telegram` Some → build message + read `ADVISORY_CRON_TG_API_BASE` env var at call site → `alert.send_with_base(&api_base, &msg).await`. Alert failure → `tracing::warn!`, never bail. Task exit code unaffected by alert delivery.
+
+**INVARIANTS.md:**
+- INV-19 appended (Telegram HTTP boundary: 10s double-guard timeout, log-warn-not-bail, env-free alert module rule).
+
+**Dev-dep:**
+- `wiremock = "0.6"` added to `[dev-dependencies]`. Zero impact on release binary (3.9MB, was 2.1MB pre-P008 but still < 7MB budget).
+
+**Tests (+22 new, total 116):**
+- `src/alert.rs` unit tests (12): from_config none/inline/file/both/neither, send_with_base happy-200/500/401 via wiremock, format_failure_message fields/empty-stderr, truncate_bytes UTF-8 boundary.
+- `src/config.rs` unit tests (6): load_without_alert_block, load_with_alert_inline/file_token, validate_alert_both/neither/empty_chat_id.
+- `tests/cli_run_alert.rs` integration (3): failing task POSTs to mock Telegram (1 call asserted), failing task without alert config sends 0 POSTs, successful task sends 0 POSTs. All via `Command::env("ADVISORY_CRON_TG_API_BASE", mock_server.uri())` — env-var-at-call-site pattern verified end-to-end.
+
+**Docs updated (Tầng 1):**
+- `docs/ARCHITECTURE.md` — Modules row for `src/alert.rs`; Config schema TOML block + field reference rows for `[alert.telegram]`; Error handling + alerting Phase 2 paragraph; Phase status 2.1 shipped.
+- `docs/security/INVARIANTS.md` — INV-19 appended.
+- `README.md` — Phase 2.1 section with config snippet.
+
+**Acceptance (all ✅):**
+- `cargo build --release` — zero warnings, 3.9MB binary (< 7MB budget)
+- `cargo test --all` — 116/116 pass (94 baseline + 22 new)
+- `cargo clippy --all-targets -- -D warnings` — clean
+- `cargo fmt --check` — no diff
+- `grep "ADVISORY_CRON_TG_API_BASE" src/alert.rs` — empty (Constraint #11 satisfied)
+- `git diff src/cli/mod.rs` — empty (Constraint #1 re-instated satisfied)
+
+---
+
 ## 2026-05-27 — P007: Phase 1.6 — README + ARCHITECTURE post-ship docs polish
 
 **Phiếu:** P007 (Tầng 2 — docs-only; no code changes)

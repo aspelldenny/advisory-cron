@@ -54,8 +54,9 @@ Planned module layout for Phase 1. Worker may adjust per phiếu's spec (Archite
 | `src/launchd.rs` | Plist XML generation + `launchctl` shell invocation wrappers. macOS-only. `LaunchctlClient` trait + `RealLaunchctl`/`NoopLaunchctl` impls + `current_uid()` helper. Extended P005: `LaunchctlClient::print` method + `LaunchctlPrintOutput` struct (status reporter). `parse_next_fire` moved to `src/core/status.rs` in P006. | 1.3 ✅ → 1.5 ✅ |
 | `src/runner.rs` | `tokio::process::Command` task spawn + capture stdout/stderr/exit. `RunResult` struct. | 1.4 ✅ |
 | `src/heartbeat.rs` | JSONL append + read-last-N. `HeartbeatRecord` struct (durable schema). `tail_utf8` helper. | 1.4 ✅ |
+| `src/alert.rs` | `TelegramAlert::send_with_base` outbound POST to Telegram Bot API. Best-effort (alert fail ≠ task fail). Env-free module — the API base test-seam env var is read at the call site in `core::run::run`, NOT here. INV-19 boundary (10s timeout double-guard: reqwest client + `tokio::time::timeout`). `format_failure_message` centralises message format. | 2.1 ✅ |
 
-*(Phase 2 adds `src/alert.rs` for Telegram + `src/retry.rs` for retry policy.)*
+*(Phase 2.2 will add `src/retry.rs` for retry policy. Phase 2.3 adds crash-safe heartbeat write.)*
 
 **Layering invariant (shipped Phase 1.7):** `core::*` knows nothing about CLI or MCP. `cli::*` and `mcp::*` are both thin adapters. A single code path = single behavior — `register` from CLI and `register` from MCP MUST produce identical plist + identical side effects.
 
@@ -110,6 +111,13 @@ cron = "0 9 * * *"
 
 [heartbeat]
 log_path = "/Users/<user>/.local/state/advisory-cron/heartbeat.jsonl"
+
+# (Phase 2.1 — optional)
+[alert.telegram]
+chat_id = "1184530337"
+# Choose ONE of:
+bot_token_file = "~/.advisory-cron-secrets.env"  # path to KEY=VAL file with TG_BOT_TOKEN=...
+# bot_token = "8678210414:AAGN..."  # inline (less secure — config file must be chmod 600)
 ```
 
 ### Field reference
@@ -124,6 +132,9 @@ log_path = "/Users/<user>/.local/state/advisory-cron/heartbeat.jsonl"
 | `[schedule]` | `hour` | `u8 (0–23)` | one-of | Calendar hour for launchd `StartCalendarInterval` | `9` |
 | `[schedule]` | `minute` | `u8 (0–59)` | one-of | Calendar minute | `0` |
 | `[heartbeat]` | `log_path` | `path` | yes | Append-only JSONL heartbeat file | `~/.local/state/advisory-cron/heartbeat.jsonl` |
+| `[alert.telegram]` | `chat_id` | `string` | yes (if block present) | Telegram chat ID (numeric string or `@channelname`) | — |
+| `[alert.telegram]` | `bot_token` | `string (one-of)` | one-of bot_token/bot_token_file | Inline bot token (config file should be chmod 600) | — |
+| `[alert.telegram]` | `bot_token_file` | `path (one-of)` | one-of bot_token/bot_token_file | Path to `KEY=VAL` file containing `TG_BOT_TOKEN=...` | — |
 
 ### Schedule variants
 
@@ -279,10 +290,12 @@ Fields:
 
 Phase 1: errors go to stderr + exit code. No external alerting.
 
-Phase 2 will add `src/alert.rs`:
-- Telegram bot POST on exit_code != 0
-- Configurable via `[alert.telegram]` block
-- Best-effort (alert failure ≠ task failure)
+Phase 2 ships `src/alert.rs` (P008):
+- Telegram bot POST on `exit_code != 0` (best-effort).
+- Configurable via `[alert.telegram]` block (chat_id + bot_token OR bot_token_file).
+- INV-19 boundary: 10s timeout (reqwest client + `tokio::time::timeout` outer guard), error returned to caller as `Result<()>`.
+- `alert.rs` is env-free; the test-only API base override env var is read at the call site in `core::run::run` and passed to `send_with_base(base, msg)`. This keeps `alert.rs` unit-testable in isolation.
+- Caller in `core::run::run` log-warn-continues on alert send error — alert failure does NOT fail the task. Heartbeat JSONL is the durable failure record; Telegram is the push channel.
 
 Error categories (anyhow context chain):
 
@@ -298,7 +311,7 @@ Error categories (anyhow context chain):
 ## Phase status
 
 - ✅ **Phase 1** — Code COMPLETE (all 7 sub-phases shipped). Awaiting Sếp dogfood 3 ngày để close sprint per BACKLOG acceptance. Phase 1.1 shipped: CLI scaffold (5 subcommand stubs, clap derive). Phase 1.2 shipped: config schema (TOML + serde, `advisory-cron init` wired). Phase 1.3 shipped: launchd plist generator + `register`/`unregister` handlers (newtype dispatch, LaunchctlClient trait, idempotent unregister, zero new dep). Phase 1.4 shipped: task runner + heartbeat JSONL (`src/runner.rs` + `src/heartbeat.rs` + `run --config` flag wired; `serde_json` explicit dep; `task.label` optional config field). Phase 1.5 shipped: status reporter (`launchctl print` parsing of `descriptor` Hour/Minute → "daily at HH:MM"; heartbeat read-render; new CLI flags `--label / --config / --json / --last`; `LaunchctlClient` trait extended with `print`; INV-17 appended for `launchctl print` shell-out boundary). **Discovery (P005):** macOS 15 launchctl does NOT expose a "next fire" timestamp for `StartCalendarInterval` jobs — only configured recurrence via `descriptor = { "Hour" => N "Minute" => M }`. Acceptance gate satisfied via configured-recurrence rendering. Phase 1.7 shipped: MCP server wrapper (rmcp 1.7.0 stdio; `core::*` extraction for dual-surface parity; 5 tools; INV-18; 94 tests pass). Phase 1.6 (README + ARCHITECTURE docs polish) shipped per P007.
-- ⏸️ **Phase 2** — Deferred. Trigger: Phase 1 dogfood xanh 3 ngày.
+- 🚧 **Phase 2** — In progress. Phase 2.1 (Telegram alert) shipped per P008. Phase 2.2 (retry) + 2.3 (state recovery) pending.
 - ⏸️ **Phase 3** — Deferred. Trigger: Phase 2 ship + need Linux support.
 
 *(Worker updates this section at end of each phase EXECUTE — Tầng 2 status text.)*

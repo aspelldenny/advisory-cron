@@ -267,6 +267,28 @@ The label becomes part of a filesystem path (`~/Library/LaunchAgents/com.advisor
 
 ---
 
+### INV-19 — Telegram alert HTTP boundary: timeout + error handling, log-warn-not-bail on failure, env-free alert module
+
+**Statement:** PR introducing or modifying `src/alert.rs::TelegramAlert::send_with_base` (or any future outbound HTTP alert) MUST:
+1. Wrap the HTTP call in BOTH `reqwest::Client::builder().timeout(Duration)` (client-level) AND `tokio::time::timeout(Duration, ...)` (outer guard against pre-connect hangs / DNS hangs). Default `HTTP_TIMEOUT = 10s` (matches INV-2 generic baseline).
+2. Return `Result<()>` from `send_with_base` — caller (currently `src/core/run.rs`) decides whether to log-warn-continue (best-effort) or bail. The current contract: `core::run::run` ALWAYS log-warn-continues — alert failure ≠ task failure (PROJECT.md hard line #5 "noisy" applies to task, not to alert delivery itself).
+3. Bot token MUST come from either inline TOML `bot_token` (user-owned config file, chmod 600 responsibility on user) OR `bot_token_file` (path to `KEY=VAL` env-style file). The two are mutually exclusive at config validation time. No shell interpolation `${VAR}` pattern is supported — Worker MUST NOT add it.
+4. Telegram API base URL is `https://api.telegram.org` (constant). `send_with_base(base, msg)` accepts an explicit base for production AND test-time override. **The API base test-seam env var (`ADVISORY_CRON_TG_API_BASE`) MUST be read at the call site in `src/core/run.rs`, NEVER inside `src/alert.rs`.** This keeps `alert.rs` a pure function of its inputs and unit-testable without env setup. Production code in `core/run.rs` reads the env var with `unwrap_or_else(|_| "https://api.telegram.org".to_string())` and passes the result to `send_with_base(&api_base, &msg)`.
+
+**Why:** Telegram is the first outbound HTTP service in advisory-cron. INV-2 generic baseline ("external service call → timeout + error handling") applies but needs concrete teeth for this codebase. The log-warn-not-bail discipline is critical: silent failure is the bug advisory-cron exists to fix, but the failure we mean is *task* failure — not alert-delivery failure (network blip should not mask the underlying task failure that triggered the alert; heartbeat JSONL is the durable record, alert is the push channel). The env-free `alert.rs` rule (V2) keeps the library testable in isolation — unit tests don't need to set or unset env vars to exercise `send_with_base`.
+
+**Implementation (Phase 2.1):** `src/alert.rs::TelegramAlert::send_with_base` — `reqwest::Client::builder().timeout(HTTP_TIMEOUT).build()?` + `tokio::time::timeout(HTTP_TIMEOUT, client.post(url).form(...).send()).await`. Caller in `src/core/run.rs` reads `std::env::var("ADVISORY_CRON_TG_API_BASE").unwrap_or_else(|_| "https://api.telegram.org".to_string())` and wraps `alert.send_with_base(&api_base, &msg).await` in `if let Err(e) = ... { tracing::warn!(...); }` — no `?` propagation.
+
+**Trust boundary:** Bot token is a secret read from user config (chmod 600 responsibility on Sếp). advisory-cron does NOT log the token. POST body contains `chat_id` + `text` only — no token in body. URL contains token (Telegram API spec) — URL MUST NOT be logged at info/debug level. INV-19 forbids logging the full request URL.
+
+**Trigger keywords:** `TelegramAlert::send_with_base` call sites, `reqwest::Client` + `api.telegram.org`, API base test-seam env var reads outside `core/run.rs` (forbidden — would violate env-free `alert.rs` rule), new alert backends (Slack, Discord, etc. would need parallel INV).
+
+**Status:** Active.
+
+**Implemented in Giám sát:** No (project-local). Worker self-checks during EXECUTE; Giám sát soi PR diff for alert-related changes via INV-2 generic rubric + specific check that the API base env var does not appear in `src/alert.rs`.
+
+---
+
 ## How INV are checked
 
 1. Worker pushes PR.

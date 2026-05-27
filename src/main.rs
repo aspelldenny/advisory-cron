@@ -3,6 +3,7 @@
 //! Parses subcommand via clap derive, dispatches to handler in `cli::*`,
 //! returns appropriate exit code per ARCHITECTURE.md §CLI surface exit codes.
 
+mod alert;
 mod cli;
 mod config;
 mod core;
