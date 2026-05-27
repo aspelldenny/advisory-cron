@@ -5,8 +5,10 @@
 
 mod cli;
 mod config;
+mod core;
 mod heartbeat;
 mod launchd;
+mod mcp;
 mod runner;
 
 use clap::Parser;

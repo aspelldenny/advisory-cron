@@ -247,6 +247,26 @@ The label becomes part of a filesystem path (`~/Library/LaunchAgents/com.advisor
 
 ---
 
+### INV-18 — MCP transport boundary: stdio JSON-RPC, label sanitization at tool entry
+
+**Statement:** PR introducing MCP tool handlers (`src/mcp/tools.rs`) MUST:
+1. Validate every `label` field at the MCP tool boundary BEFORE invoking `core::*::run` — ASCII alphanumeric + `-` + `_` allowlist (mirrors INV-12 pre-flight). This is a THIRD enforcement point in addition to INV-12's two points (CLI pre-flight + `generate_plist` defense-in-depth). MCP clients are external — never trust input.
+2. Validate every `config_path` field is either absent (None → defaults) or a path with no `..` traversal sequences. (`PathBuf::components().any(|c| matches!(c, std::path::Component::ParentDir))` → reject.)
+3. Tool result serialization via `serde_json::to_string` on `#[derive(Serialize)]` structs — NEVER hand-roll JSON (INV-16 generalization).
+4. Tool handler errors propagate as MCP error objects (NOT process exit) — only transport-level errors (stdin EOF, malformed JSON-RPC frame) escape to `serve_stdio` and map to exit code 5 per ARCHITECTURE.md §CLI surface exit codes (via `return Ok(5)` in `src/cli/mcp.rs::run` per V2 P006 [O1.1]).
+
+**Why:** MCP boundary IS the new attack surface in Phase 1.7. CLI was trusted (user owns their own keyboard). MCP tools are callable by any process Claude Desktop / Code talks to — the MCP server has no way to verify the upstream client's intentions. Defense at the boundary is non-negotiable.
+
+**Implementation (Phase 1.7):** `src/mcp/tools.rs` — `validate_label` helper called at start of every tool handler that takes a `label`. `validate_config_path` for path inputs. `core::*::run` still validates internally (defense-in-depth). `serde_json::to_string_pretty(output)?` for all tool results.
+
+**Trigger keywords:** new MCP tool handler additions, `rmcp::ServerHandler` impls, MCP server boot in any new transport beyond stdio.
+
+**Status:** Active.
+
+**Implemented in Giám sát:** No (project-local). Worker self-checks during EXECUTE; Giám sát soi PR diff for MCP-related additions.
+
+---
+
 ## How INV are checked
 
 1. Worker pushes PR.

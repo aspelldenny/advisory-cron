@@ -6,6 +6,60 @@
 
 ---
 
+## 2026-05-27 — P006: Phase 1.7 — MCP server wrapper (stdio) + core/* extraction
+
+**Phiếu:** P006 (Tầng 1 — new dep `rmcp 1.7.0` + `tokio io-std feature`, new modules `src/core/*` + `src/mcp/*` + `src/cli/mcp.rs`, new exit code 5, new INV-18, CLI/MCP dual-surface ship)
+
+**New dependency:**
+- `rmcp = { version = "1.7.0", features = ["server", "transport-io"] }` — official Anthropic Rust MCP SDK. Provides `ServerHandler` trait, rmcp stdio transport, `Tool`, `Content`, `CallToolResult`.
+- `tokio` gains `"io-std"` feature — required for rmcp stdio transport (`tokio::io::stdin/stdout`).
+
+**New modules — `src/core/*` (pure business logic, zero CLI/MCP coupling):**
+- `src/core/mod.rs` — re-exports 6 sub-modules.
+- `src/core/config_path.rs` — `home_dir()` + `default_config_path()`: `$HOME` helpers; bail on unset/empty. Replaces inline `std::env::var("HOME")` in old `cli::*` handlers.
+- `src/core/init.rs` — `run(InitArgs) -> Result<InitOutput>`: write default config. Resolves home internally.
+- `src/core/register.rs` — `run(RegisterArgs, &L: LaunchctlClient) -> Result<RegisterOutput>`: generate plist + bootstrap. Resolves home + launch_agents_dir + self_exe internally.
+- `src/core/unregister.rs` — `run(UnregisterArgs, &L: LaunchctlClient) -> Result<UnregisterOutput>`: idempotent bootout + plist removal.
+- `src/core/run.rs` — `async run(RunArgs) -> Result<RunOutput>`: task runner + heartbeat. Full logic extracted from `cli/run.rs`.
+- `src/core/status.rs` — `run(StatusArgs, &L) -> Result<StatusReport>`: launchd query + heartbeat read. `parse_next_fire` and `StatusReport` moved here from `cli/status.rs` (now pub for MCP serialization).
+
+**New modules — `src/mcp/*` (MCP server, delegates to `core::*`):**
+- `src/mcp/mod.rs` — re-exports `server` and `tools`.
+- `src/mcp/server.rs` — `serve_stdio() -> Result<()>`: rmcp `ServerHandler::serve(stdio()).await` + `.waiting().await`.
+- `src/mcp/tools.rs` — `AdvisoryCronHandler` implementing rmcp `ServerHandler`. 5 tools (`init`, `register`, `unregister`, `run`, `status`) with hand-written JSON schemas (Decision 3 — no `schemars` dep). INV-18 input validation (`validate_label` + `validate_config_path`) at MCP boundary before `core::*` call. Tool errors = `is_error: Some(true)` CallToolResult (never JSON-RPC error / process exit).
+
+**New module — `src/cli/mcp.rs` (thin shell):**
+- `async fn run(Args) -> Result<u8>`: calls `mcp::server::serve_stdio()`, returns `Ok(0)` on success, `Ok(5)` on transport error (never `process::exit(5)`).
+
+**CLI: `advisory-cron mcp` wired:**
+- `src/cli/mod.rs` extended: `pub mod mcp;` + `Mcp(mcp::Args)` variant + dispatch arm (+4 lines exactly; Constraint #1 retired for P006 only per phiếu spec).
+- `src/main.rs` gains `mod core;` + `mod mcp;`.
+
+**CLI thin-shell rewrites (all `cli::*` now delegate to `core::*`):**
+- `cli/init.rs`, `cli/register.rs`, `cli/unregister.rs`, `cli/run.rs`, `cli/status.rs` — all rewritten as thin adapters. Core logic extracted to `core::*`. Exit code mapping preserved (backward compat). Warning messages for idempotent unregister paths preserved.
+
+**INVARIANTS.md updated:**
+- Appended INV-18 (MCP transport boundary — label allowlist + path traversal + tool error protocol). Per RULES.md:22 — security boundary touched.
+
+**Tests added (total 94 — 65 unit + 29 integration):**
+- Unit tests: `core/config_path.rs` (3), `core/init.rs` (3), `core/register.rs` (2), `core/unregister.rs` (2), `core/run.rs` (3), `core/status.rs` (7), `mcp/tools.rs` (5), `cli/status.rs` tail helpers (2) — 27 new unit tests.
+- Integration: `tests/cli_mcp.rs` — 7 binary subprocess tests: `mcp --help` exits 0, top-level help includes `mcp`, handshake + tools/list = 5 tools, register rejects invalid label (INV-18), init rejects path traversal (INV-18), serverInfo.name = "advisory-cron", parity CLI register uses correct label.
+- Baseline maintained: all 70 pre-P006 tests continue to pass.
+
+**Docs updated (Tầng 1):**
+- `docs/ARCHITECTURE.md` — §Modules table: 12 new/updated rows for core/* + mcp/* + cli/mcp.rs with ✅ markers; V2 internal-resolution pattern noted; §CLI surface `mcp` row Phase marked 1.7 ✅; §MCP surface section rewritten with actual tool schemas, SDK details, INV-18 summary, V2 cli/mcp.rs contract, Claude Desktop config; §Phase status updated to 1.7 ✅.
+- `docs/security/INVARIANTS.md` — INV-18 appended.
+- `README.md` — "Quick start (CLI)" updated with correct flag names; "MCP server" section added with Claude Desktop config JSON + smoke test + tool table.
+
+**Acceptance (all ✅):**
+- `cargo build --release` — zero warnings, 2.1MB binary (< 7MB budget)
+- `cargo test --all` — 94/94 pass
+- `cargo clippy --all-targets -- -D warnings` — clean
+- `cargo fmt --check` — no diff
+- `git diff src/config.rs src/launchd.rs src/runner.rs src/heartbeat.rs` — empty (zero drift in existing modules)
+
+---
+
 ## 2026-05-27 — P005: Phase 1.5 — Status reporter
 
 **Phiếu:** P005 (Tầng 1 — 4 new CLI flags on `status` subcommand per RULES.md:14; `LaunchctlClient` trait additive extension; INV-17 appended for `launchctl print` shell-out boundary; NO new dep)

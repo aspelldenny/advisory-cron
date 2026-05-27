@@ -1,43 +1,41 @@
-//! `advisory-cron init` — write default config to ~/.config/advisory-cron/config.toml.
+//! `advisory-cron init` — thin CLI shell over `core::init::run`.
 //!
-//! Phase 1.2 — first real subcommand implementation. Wires `Config::write_default`.
+//! Phase 1.2 logic extracted to `src/core/init.rs` in Phase 1.7 (P006).
+//! This module handles Args parsing + stdout/stderr + exit code mapping only.
 
-use anyhow::{Context, Result, bail};
+use crate::core::init::{InitArgs, run as core_run};
+use anyhow::Result;
 use clap::Args as ClapArgs;
-use std::{env, path::PathBuf};
-
-use crate::config::Config;
+use std::path::PathBuf;
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
     /// Overwrite existing config file if present.
     #[arg(long)]
     pub force: bool,
+    /// Override default config path (default: ~/.config/advisory-cron/config.toml).
+    #[arg(long)]
+    pub config: Option<PathBuf>,
 }
 
+/// Returns `Result<u8>` matching dispatch contract.
+/// Exit codes:
+/// - 0: config written successfully.
+/// - 2: config already exists without --force (or other config/IO error).
 pub async fn run(args: Args) -> Result<u8> {
-    let home = home_dir().context("failed to resolve $HOME")?;
-    let config_path = home.join(".config/advisory-cron/config.toml");
-
-    match Config::write_default(&config_path, &home, args.force) {
-        Ok(()) => {
-            println!("wrote default config to {}", config_path.display());
+    match core_run(InitArgs {
+        force: args.force,
+        config_path: args.config,
+    }) {
+        Ok(output) => {
+            println!("wrote default config to {}", output.config_path.display());
             Ok(0)
         }
         Err(e) => {
-            // "config exists without --force" + parse/IO failures → exit 2
-            // per ARCHITECTURE.md §CLI surface exit codes.
+            // Preserve P002 ship behavior: all errors → exit 2.
+            // (write_default returns Err on "already exists + no force" AND IO failures.)
             eprintln!("error: {e:#}");
             Ok(2)
         }
-    }
-}
-
-/// Resolve `$HOME` from env. Returns error if unset (rare on macOS / Linux dev shells).
-fn home_dir() -> Result<PathBuf> {
-    let raw = env::var("HOME").ok().filter(|s| !s.is_empty());
-    match raw {
-        Some(s) => Ok(PathBuf::from(s)),
-        None => bail!("$HOME env var is not set; cannot resolve default config path"),
     }
 }

@@ -6,6 +6,7 @@
 use clap::Subcommand;
 
 pub mod init;
+pub mod mcp;
 pub mod register;
 pub mod run;
 pub mod status;
@@ -23,6 +24,8 @@ pub enum Commands {
     Run(run::Args),
     /// Show next scheduled fire time + last heartbeat.
     Status(status::Args),
+    /// Start MCP server on stdin/stdout (JSON-RPC 2.0, 5 tools).
+    Mcp(mcp::Args),
 }
 
 pub async fn dispatch(cmd: Commands) -> anyhow::Result<u8> {
@@ -32,5 +35,6 @@ pub async fn dispatch(cmd: Commands) -> anyhow::Result<u8> {
         Commands::Unregister(args) => unregister::run(args).await,
         Commands::Run(args) => run::run(args).await,
         Commands::Status(args) => status::run(args).await,
+        Commands::Mcp(args) => mcp::run(args).await,
     }
 }

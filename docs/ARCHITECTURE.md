@@ -39,18 +39,27 @@ Planned module layout for Phase 1. Worker may adjust per phiếu's spec (Archite
 | `src/cli/unregister.rs` | `advisory-cron unregister` — `launchctl bootout` + remove plist. Skeleton shipped 1.1; impl shipped 1.3. | 1.3 ✅ |
 | `src/cli/run.rs` | `advisory-cron run` — fire task once, write heartbeat. Skeleton shipped 1.1; impl deferred to 1.4. | 1.1 skeleton ✅ → impl 1.4 |
 | `src/cli/status.rs` | `advisory-cron status` — read launchd next-fire + last heartbeat. Skeleton shipped 1.1; impl shipped 1.5. | 1.5 ✅ |
-| `src/cli/mcp.rs` | `advisory-cron mcp` — start MCP server over stdio (thin shell over `core::*`). | 1.7 |
-| `src/core/mod.rs` | Pure functions called by BOTH CLI handlers and MCP tool handlers. Zero CLI/MCP coupling. Introduced 1.7 (may require touch-up to 1.2-1.5 handlers to extract their core logic). | 1.7 |
-| `src/mcp/server.rs` | MCP server bootstrap (handshake, transport, tool registry). SDK choice TBD by Architect (likely `rmcp`). | 1.7 |
-| `src/mcp/tools.rs` | 5 MCP tool definitions (input schema + handler → `core::*`). | 1.7 |
+| `src/cli/mcp.rs` | `advisory-cron mcp` — thin shell: calls `mcp::server::serve_stdio()`, returns `Ok(5)` on transport error (not `process::exit`). | 1.7 ✅ |
+| `src/core/mod.rs` | Re-exports `config_path`, `init`, `register`, `unregister`, `run`, `status` sub-modules. Zero CLI/MCP coupling. | 1.7 ✅ |
+| `src/core/config_path.rs` | `home_dir() -> Result<PathBuf>` and `default_config_path() -> Result<PathBuf>` — shared `$HOME` helpers used by all `core::*::run` fns. Bails if `$HOME` is unset or empty. | 1.7 ✅ |
+| `src/core/init.rs` | `run(InitArgs) -> Result<InitOutput>` — write default config. Resolves home via `home_dir()` internally. | 1.7 ✅ |
+| `src/core/register.rs` | `run(RegisterArgs, &L: LaunchctlClient) -> Result<RegisterOutput>` — generate plist + bootstrap. Resolves home + `launch_agents_dir` + `self_exe` internally. | 1.7 ✅ |
+| `src/core/unregister.rs` | `run(UnregisterArgs, &L: LaunchctlClient) -> Result<UnregisterOutput>` — bootout + remove plist. Idempotent. Resolves home internally. | 1.7 ✅ |
+| `src/core/run.rs` | `async run(RunArgs) -> Result<RunOutput>` — fire task once + write heartbeat. Full runner logic extracted from `cli/run.rs`. | 1.7 ✅ |
+| `src/core/status.rs` | `run(StatusArgs, &L: LaunchctlClient) -> Result<StatusReport>` — launchd query + heartbeat read. `parse_next_fire` moved here from `cli/status.rs`. `StatusReport` pub (shared by CLI render + MCP serialize). | 1.7 ✅ |
+| `src/mcp/mod.rs` | Re-exports `server` and `tools` sub-modules. | 1.7 ✅ |
+| `src/mcp/server.rs` | `serve_stdio() -> Result<()>` — rmcp `ServerHandler::serve(stdio()).await` + `.waiting().await`. Converts SDK errors to `anyhow::Error`. | 1.7 ✅ |
+| `src/mcp/tools.rs` | `AdvisoryCronHandler` implementing rmcp `ServerHandler`. 5 tools with hand-written JSON schemas (Decision 3). INV-18 validation (`validate_label`, `validate_config_path`) at MCP boundary before `core::*` call. Tool errors as `is_error=true` results. | 1.7 ✅ |
 | `src/config.rs` | TOML config schema (serde-derive). Validation on load. | 1.2 ✅ |
-| `src/launchd.rs` | Plist XML generation + `launchctl` shell invocation wrappers. macOS-only. `LaunchctlClient` trait + `RealLaunchctl`/`NoopLaunchctl` impls + `current_uid()` helper. Extended P005: `LaunchctlClient::print` method + `LaunchctlPrintOutput` struct (status reporter). `parse_next_fire` in `src/cli/status.rs` parses macOS 15 `descriptor` block Hour/Minute (no timestamp key in launchctl output — per P005 Discovery). | 1.3 ✅ → 1.5 ✅ |
+| `src/launchd.rs` | Plist XML generation + `launchctl` shell invocation wrappers. macOS-only. `LaunchctlClient` trait + `RealLaunchctl`/`NoopLaunchctl` impls + `current_uid()` helper. Extended P005: `LaunchctlClient::print` method + `LaunchctlPrintOutput` struct (status reporter). `parse_next_fire` moved to `src/core/status.rs` in P006. | 1.3 ✅ → 1.5 ✅ |
 | `src/runner.rs` | `tokio::process::Command` task spawn + capture stdout/stderr/exit. `RunResult` struct. | 1.4 ✅ |
 | `src/heartbeat.rs` | JSONL append + read-last-N. `HeartbeatRecord` struct (durable schema). `tail_utf8` helper. | 1.4 ✅ |
 
 *(Phase 2 adds `src/alert.rs` for Telegram + `src/retry.rs` for retry policy.)*
 
 **Layering invariant (introduced Phase 1.7):** `core::*` knows nothing about CLI or MCP. `cli::*` and `mcp::*` are both thin adapters. A single code path = single behavior — `register` from CLI and `register` from MCP MUST produce identical plist + identical side effects.
+
+**V2 internal-resolution pattern (P006):** Every `core::*::run` fn resolves its own env dependencies (`$HOME`, `LaunchAgents` dir, `current_exe`) internally via stdlib. ONLY `&L: LaunchctlClient` is injected for testability (prod = `RealLaunchctl`, test = `NoopLaunchctl`). No config-path or home-dir threading through call stacks.
 
 ---
 
@@ -63,7 +72,7 @@ Planned module layout for Phase 1. Worker may adjust per phiếu's spec (Archite
 | `unregister` | `--label <name>` `--config <path>` (reserved, unused P003) | Remove + unload plist (idempotent) | 1.3 ✅ |
 | `run` | `--config <path>` (optional — overrides default config path) | Fire configured task once, write heartbeat | 1.4 ✅ |
 | `status` | `--label <name>` `--config <path>` (optional) `--json` (machine output) `--last <N>` (default 5) | Show next fire + last heartbeat | 1.5 ✅ |
-| `mcp` | (no args — stdio only) | Start MCP server on stdin/stdout; serves 5 tools mirroring above | 1.7 |
+| `mcp` | (no args — stdio only) | Start MCP server on stdin/stdout; serves 5 tools mirroring above | 1.7 ✅ |
 
 Exit codes:
 
@@ -198,21 +207,35 @@ Then `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.advisorycron.<labe
 
 `advisory-cron mcp` launches an MCP (Model Context Protocol) JSON-RPC 2.0 server over stdin/stdout. Designed for Claude Desktop / Claude Code MCP client integration — NOT a long-running network daemon (matches hard line #1: client owns process lifetime).
 
-**Transport:** stdio only in Phase 1. HTTP/SSE deferred (not needed for solo macOS).
+**Transport:** stdio only in Phase 1 (rmcp `transport::io::stdio()`). HTTP/SSE deferred (not needed for solo macOS).
 
-**Tool registry:** 5 tools, 1-1 with CLI subcommands. Each tool's handler delegates to `core::*` (same code path as CLI). Tool schemas (input/output JSON) populated by Architect during Phase 1.7 spec.
+**SDK:** `rmcp = "1.7.0"` (official Anthropic Rust MCP SDK). `ServerHandler` trait with `get_info`, `list_tools`, `call_tool` methods. Hand-written JSON schemas via `serde_json::json!` + `Arc<serde_json::Map>` (Decision 3 — no `#[derive(JsonSchema)]` on our types needed; avoids `schemars` dep).
 
-| MCP tool | Mirrors CLI | Input schema (TBD by Architect) |
-|----------|-------------|---------------------------------|
-| `init` | `advisory-cron init` | `{ force?: bool }` |
-| `register` | `advisory-cron register` | `{ schedule: string, label: string }` |
-| `unregister` | `advisory-cron unregister` | `{ label: string }` |
-| `run` | `advisory-cron run` | `{}` |
-| `status` | `advisory-cron status` | `{}` → returns next fire + last heartbeat JSON |
+**Tool registry:** 5 tools, 1-1 with CLI subcommands. Each tool's handler in `src/mcp/tools.rs` delegates to the corresponding `core::*::run` (same code path as CLI).
 
-**Claude Desktop registration (sketch — Architect verifies exact JSON in P00x):**
+| MCP tool | Mirrors CLI | Input schema | Output |
+|----------|-------------|--------------|--------|
+| `init` | `advisory-cron init` | `{ force?: bool, config_path?: string }` | `{ config_path: string, written: bool }` JSON |
+| `register` | `advisory-cron register` | `{ label: string (required), schedule?: string, config_path?: string }` | `{ plist_path, label, bootstrapped }` JSON |
+| `unregister` | `advisory-cron unregister` | `{ label: string (required), config_path?: string }` | `{ label, plist_existed, was_loaded }` JSON |
+| `run` | `advisory-cron run` | `{ config_path?: string }` | `{ exit_code, duration_ms, stdout_tail, stderr_tail, heartbeat_appended }` JSON |
+| `status` | `advisory-cron status` | `{ label?: string, config_path?: string, last?: int (default 5) }` | `StatusReport` JSON |
+
+**INV-18 — MCP transport boundary validation** (3-point defense-in-depth):
+1. `label` field: ASCII alphanumeric + `-` + `_`, non-empty. Validated via `validate_label()` before `core::*` call.
+2. `config_path` field: must not contain `..` components. Validated via `validate_config_path()` before `core::*` call.
+3. Tool errors returned as `CallToolResult { is_error: Some(true), content: [text message] }` — never as JSON-RPC error responses or process exits.
+
+**`cli/mcp.rs::run` return contract (V2 [O1.1]):**
+- Returns `Result<u8>` (not `Result<()>` or `process::exit()`).
+- Transport success → `Ok(0)`.
+- Transport/initialization error → `Ok(5)` (after `eprintln!` to stderr).
+- Exit code 5 propagated by `main.rs` via the standard dispatch return.
+
+**Claude Desktop registration:**
 
 ```json
+// ~/Library/Application Support/Claude/claude_desktop_config.json
 {
   "mcpServers": {
     "advisory-cron": {
@@ -223,9 +246,9 @@ Then `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.advisorycron.<labe
 }
 ```
 
-**SDK choice:** TBD by Architect. Likely candidates: `rmcp` (official Anthropic Rust MCP SDK) or hand-rolled JSON-RPC if dep tree too heavy. Architect MUST verify via `context7` before spec.
+Replace `<user>` with your macOS username. Verify binary path with `which advisory-cron`.
 
-**Behavioral invariant:** `register` via MCP MUST produce identical plist + identical `launchctl` state as `register` via CLI. Tested by integration test that exercises both paths against the same temp `LaunchAgents` dir and diffs results.
+**Behavioral invariant:** `register` via MCP MUST produce identical plist + identical `launchctl` state as `register` via CLI. Enforced by both routing to `core::register::run`. Tested by `tests/cli_mcp.rs::parity_cli_register_uses_correct_label_suffix`.
 
 ---
 
@@ -274,7 +297,7 @@ Error categories (anyhow context chain):
 
 ## Phase status
 
-- 🚧 **Phase 1** — In progress. Phase 1.1 shipped: CLI scaffold (5 subcommand stubs, clap derive). Phase 1.2 shipped: config schema (TOML + serde, `advisory-cron init` wired). Phase 1.3 shipped: launchd plist generator + `register`/`unregister` handlers (newtype dispatch, LaunchctlClient trait, idempotent unregister, zero new dep). Phase 1.4 shipped: task runner + heartbeat JSONL (`src/runner.rs` + `src/heartbeat.rs` + `run --config` flag wired; `serde_json` explicit dep; `task.label` optional config field). Phase 1.5 shipped: status reporter (`launchctl print` parsing of `descriptor` Hour/Minute → "daily at HH:MM"; heartbeat read-render; new CLI flags `--label / --config / --json / --last`; `LaunchctlClient` trait extended with `print`; INV-17 appended for `launchctl print` shell-out boundary). **Discovery (P005):** macOS 15 launchctl does NOT expose a "next fire" timestamp for `StartCalendarInterval` jobs — only configured recurrence via `descriptor = { "Hour" => N "Minute" => M }`. Acceptance gate satisfied via configured-recurrence rendering. Phases 1.6–1.7 pending.
+- ✅ **Phase 1** — In progress (1.7 shipped; 1.6 docs remaining). Phase 1.1 shipped: CLI scaffold (5 subcommand stubs, clap derive). Phase 1.2 shipped: config schema (TOML + serde, `advisory-cron init` wired). Phase 1.3 shipped: launchd plist generator + `register`/`unregister` handlers (newtype dispatch, LaunchctlClient trait, idempotent unregister, zero new dep). Phase 1.4 shipped: task runner + heartbeat JSONL (`src/runner.rs` + `src/heartbeat.rs` + `run --config` flag wired; `serde_json` explicit dep; `task.label` optional config field). Phase 1.5 shipped: status reporter (`launchctl print` parsing of `descriptor` Hour/Minute → "daily at HH:MM"; heartbeat read-render; new CLI flags `--label / --config / --json / --last`; `LaunchctlClient` trait extended with `print`; INV-17 appended for `launchctl print` shell-out boundary). **Discovery (P005):** macOS 15 launchctl does NOT expose a "next fire" timestamp for `StartCalendarInterval` jobs — only configured recurrence via `descriptor = { "Hour" => N "Minute" => M }`. Acceptance gate satisfied via configured-recurrence rendering. Phase 1.7 shipped: MCP server wrapper (rmcp 1.7.0 stdio; `core::*` extraction for dual-surface parity; 5 tools; INV-18; 94 tests pass). Phase 1.6 (README + ARCHITECTURE docs polish) pending.
 - ⏸️ **Phase 2** — Deferred. Trigger: Phase 1 dogfood xanh 3 ngày.
 - ⏸️ **Phase 3** — Deferred. Trigger: Phase 2 ship + need Linux support.
 
