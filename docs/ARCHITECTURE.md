@@ -38,13 +38,13 @@ Planned module layout for Phase 1. Worker may adjust per phiếu's spec (Archite
 | `src/cli/register.rs` | `advisory-cron register` — generate plist + `launchctl bootstrap`. Skeleton shipped 1.1; impl shipped 1.3. | 1.3 ✅ |
 | `src/cli/unregister.rs` | `advisory-cron unregister` — `launchctl bootout` + remove plist. Skeleton shipped 1.1; impl shipped 1.3. | 1.3 ✅ |
 | `src/cli/run.rs` | `advisory-cron run` — fire task once, write heartbeat. Skeleton shipped 1.1; impl deferred to 1.4. | 1.1 skeleton ✅ → impl 1.4 |
-| `src/cli/status.rs` | `advisory-cron status` — read launchd next-fire + last heartbeat. Skeleton shipped 1.1; impl deferred to 1.5. | 1.1 skeleton ✅ → impl 1.5 |
+| `src/cli/status.rs` | `advisory-cron status` — read launchd next-fire + last heartbeat. Skeleton shipped 1.1; impl shipped 1.5. | 1.5 ✅ |
 | `src/cli/mcp.rs` | `advisory-cron mcp` — start MCP server over stdio (thin shell over `core::*`). | 1.7 |
 | `src/core/mod.rs` | Pure functions called by BOTH CLI handlers and MCP tool handlers. Zero CLI/MCP coupling. Introduced 1.7 (may require touch-up to 1.2-1.5 handlers to extract their core logic). | 1.7 |
 | `src/mcp/server.rs` | MCP server bootstrap (handshake, transport, tool registry). SDK choice TBD by Architect (likely `rmcp`). | 1.7 |
 | `src/mcp/tools.rs` | 5 MCP tool definitions (input schema + handler → `core::*`). | 1.7 |
 | `src/config.rs` | TOML config schema (serde-derive). Validation on load. | 1.2 ✅ |
-| `src/launchd.rs` | Plist XML generation + `launchctl` shell invocation wrappers. macOS-only. `LaunchctlClient` trait + `RealLaunchctl`/`NoopLaunchctl` impls + `current_uid()` helper. | 1.3 ✅ |
+| `src/launchd.rs` | Plist XML generation + `launchctl` shell invocation wrappers. macOS-only. `LaunchctlClient` trait + `RealLaunchctl`/`NoopLaunchctl` impls + `current_uid()` helper. Extended P005: `LaunchctlClient::print` method + `LaunchctlPrintOutput` struct (status reporter). `parse_next_fire` in `src/cli/status.rs` parses macOS 15 `descriptor` block Hour/Minute (no timestamp key in launchctl output — per P005 Discovery). | 1.3 ✅ → 1.5 ✅ |
 | `src/runner.rs` | `tokio::process::Command` task spawn + capture stdout/stderr/exit. `RunResult` struct. | 1.4 ✅ |
 | `src/heartbeat.rs` | JSONL append + read-last-N. `HeartbeatRecord` struct (durable schema). `tail_utf8` helper. | 1.4 ✅ |
 
@@ -62,7 +62,7 @@ Planned module layout for Phase 1. Worker may adjust per phiếu's spec (Archite
 | `register` | `--schedule <cron>` (optional — overrides config; `M H * * *` daily form only) `--label <name>` `--config <path>` (optional — overrides default config path) | Generate + load plist | 1.3 ✅ |
 | `unregister` | `--label <name>` `--config <path>` (reserved, unused P003) | Remove + unload plist (idempotent) | 1.3 ✅ |
 | `run` | `--config <path>` (optional — overrides default config path) | Fire configured task once, write heartbeat | 1.4 ✅ |
-| `status` | `--json` (machine output) | Show next fire + last heartbeat | 1.5 |
+| `status` | `--label <name>` `--config <path>` (optional) `--json` (machine output) `--last <N>` (default 5) | Show next fire + last heartbeat | 1.5 ✅ |
 | `mcp` | (no args — stdio only) | Start MCP server on stdin/stdout; serves 5 tools mirroring above | 1.7 |
 
 Exit codes:
@@ -184,7 +184,7 @@ Then `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.advisorycron.<labe
 **Lifecycle:**
 - `register` writes plist + bootstraps. Plist written BEFORE bootstrap attempt — if bootstrap fails, plist is left for user inspection.
 - `unregister` `launchctl bootout gui/$UID/com.advisorycron.<label>` + removes plist file. **Idempotent:** succeeds (exit 0) if label not loaded or plist already absent.
-- `status` `launchctl print gui/$UID/com.advisorycron.<label>` parses output for next fire time
+- `status` `launchctl print gui/$UID/com.advisorycron.<label>` parses output for next fire time. **P005 Discovery:** macOS 15 (Darwin 25.5.0) exposes NO "next fire" timestamp key — only the configured `descriptor = { "Hour" => N "Minute" => M }`. `parse_next_fire` extracts these to render "daily at HH:MM" (configured recurrence). Future macOS versions without this key → renders "unknown (launchctl format not recognized)".
 
 **UID resolution:** `launchctl` requires numeric UID (not `$UID` shell expansion). `src/launchd.rs::current_uid()` shells out `id -u` (zero-unsafe, zero-dep — Heads-up #5 Option B resolution).
 
@@ -274,7 +274,7 @@ Error categories (anyhow context chain):
 
 ## Phase status
 
-- 🚧 **Phase 1** — In progress. Phase 1.1 shipped: CLI scaffold (5 subcommand stubs, clap derive). Phase 1.2 shipped: config schema (TOML + serde, `advisory-cron init` wired). Phase 1.3 shipped: launchd plist generator + `register`/`unregister` handlers (newtype dispatch, LaunchctlClient trait, idempotent unregister, zero new dep). Phase 1.4 shipped: task runner + heartbeat JSONL (`src/runner.rs` + `src/heartbeat.rs` + `run --config` flag wired; `serde_json` explicit dep; `task.label` optional config field). Phases 1.5–1.7 pending.
+- 🚧 **Phase 1** — In progress. Phase 1.1 shipped: CLI scaffold (5 subcommand stubs, clap derive). Phase 1.2 shipped: config schema (TOML + serde, `advisory-cron init` wired). Phase 1.3 shipped: launchd plist generator + `register`/`unregister` handlers (newtype dispatch, LaunchctlClient trait, idempotent unregister, zero new dep). Phase 1.4 shipped: task runner + heartbeat JSONL (`src/runner.rs` + `src/heartbeat.rs` + `run --config` flag wired; `serde_json` explicit dep; `task.label` optional config field). Phase 1.5 shipped: status reporter (`launchctl print` parsing of `descriptor` Hour/Minute → "daily at HH:MM"; heartbeat read-render; new CLI flags `--label / --config / --json / --last`; `LaunchctlClient` trait extended with `print`; INV-17 appended for `launchctl print` shell-out boundary). **Discovery (P005):** macOS 15 launchctl does NOT expose a "next fire" timestamp for `StartCalendarInterval` jobs — only configured recurrence via `descriptor = { "Hour" => N "Minute" => M }`. Acceptance gate satisfied via configured-recurrence rendering. Phases 1.6–1.7 pending.
 - ⏸️ **Phase 2** — Deferred. Trigger: Phase 1 dogfood xanh 3 ngày.
 - ⏸️ **Phase 3** — Deferred. Trigger: Phase 2 ship + need Linux support.
 

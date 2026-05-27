@@ -6,6 +6,10 @@
 
 ---
 
+## P005 — status reporter shipped 2026-05-27
+
+- 2026-05-27 P005: Status reporter shipped (status --label/--config/--json/--last; LaunchctlClient trait + print method; macOS 15 launchctl exposes NO next-fire timestamp — parse_next_fire pivoted to descriptor Hour/Minute → "daily at HH:MM"; INV-17 launchctl print shell-out boundary; 70 tests total, +19 new) → see docs/discoveries/P005.md
+
 ## P004 — task runner + heartbeat shipped 2026-05-27
 
 - 2026-05-27 P004: Task runner + heartbeat shipped (serde_json explicit dep, runner::fire_task + heartbeat::append/read_last_n, run --config flag + bail-on-$HOME-unset, task.label optional config field, INV-14/15/16 appended; 51 tests total) → see docs/discoveries/P004.md
