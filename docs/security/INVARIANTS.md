@@ -289,6 +289,32 @@ The label becomes part of a filesystem path (`~/Library/LaunchAgents/com.advisor
 
 ---
 
+### INV-20 — Retry policy boundary: bounded attempts, backoff respected, signal-exits not retried, single-alert-per-invocation
+
+**Statement:** PR introducing or modifying retry logic in `src/core/run.rs` (or any future retry mechanism) MUST satisfy ALL of:
+
+1. **Bounded attempts (DOS prevention):** the retry loop MUST terminate in at most `max_attempts` iterations. `max_attempts` is read from `config.retry.max_attempts` (validated `≥ 1` at config load). Runtime defense-in-depth: apply `.max(1)` floor before loop. NO unbounded `loop { ... }` over `fire_task`.
+
+2. **Backoff respected (no busy loop):** between attempts (and ONLY between attempts — never before the first or after the last), the loop MUST `tokio::time::sleep(Duration::from_secs(backoff_secs)).await`. `backoff_secs` is read from `config.retry.backoff_secs` (validated `≤ 3600` at config load). NO synchronous `std::thread::sleep` (would block tokio runtime). NO retry with zero sleep when `backoff_secs > 0` (every retry interval must honor the configured backoff).
+
+3. **Signal exits NOT retried:** `is_retryable(exit_code)` predicate MUST return `false` for `exit_code ≥ 128` (signal-killed: 130 SIGINT, 137 SIGKILL, 143 SIGTERM, etc. — convention `128 + signal_num`) AND for `exit_code == -1` (spawn-failure sentinel per INV-14). Retrying a signal-killed process fights the operator (Ctrl+C, `launchctl kill`, OOM killer); retrying a spawn-fail (command path missing) is a deploy bug surface, not a transient blip. ONLY `exit_code ∈ 1..=127` is retryable per BACKLOG Phase 2.2 spec.
+
+4. **Single alert per invocation (no per-attempt spam):** the Telegram alert call (`crate::alert::TelegramAlert::send_with_base`) MUST be invoked AT MOST ONCE per `core::run::run` call, regardless of retry count. Alert fires ONLY after the retry loop exits — never inside a per-attempt iteration. If `final_exit_code == 0` (task succeeded on some attempt) → ZERO alerts. If `final_exit_code != 0` (all retries exhausted OR signal-killed early) → ONE alert. Heartbeat append IS per-attempt (1 JSONL line per fire — that is the durable record); alert is per-invocation (that is the push channel).
+
+**Why:** Retry is the difference between "transient blip silently recovered" and "operator-fightable infinite spawn loop". Without bounded attempts → process bombs the user's machine + spams Telegram (and runs up Claude API spend if task is `/advisory-scan`). Without backoff → busy-loop pegs CPU and DOSes whatever the task calls (Telegram, crates.io, Claude API). Without signal-exit exclusion → operator's `Ctrl+C` is fought by the program. Without single-alert discipline → Sếp's chat gets `max_attempts` messages per failed run, defeating the "noisy = useful" intent (3 messages saying the same thing = 0 actionable signal).
+
+**Implementation (Phase 2.2):** `src/core/run.rs` — single `for attempt in 1..=max_attempts` loop. `is_retryable(exit_code: i32) -> bool` private fn returns `(1..=127).contains(&exit_code)`. Backoff via `tokio::time::sleep(Duration::from_secs(backoff_secs)).await`, placed AFTER the iteration's heartbeat append + retry-decision branches, ONLY when next attempt will run (skip sleep on success / non-retryable / last-attempt-exhausted exit paths). Alert block placed AFTER the loop, gated on `final_exit_code != 0`.
+
+**Trust boundary:** retry loop runs INSIDE the same `tokio` runtime as the rest of `core::run::run`. No new process boundary. No new external service. Signal handling (Ctrl+C) propagates via tokio's signal handling on `fire_task`'s child process — child receives signal → exits with `≥128` → loop sees non-retryable code → exits cleanly (operator intent honored).
+
+**Trigger keywords:** `for attempt in` (or `while`) loops over `runner::fire_task` / `crate::runner::fire_task`; `tokio::time::sleep` near retry-shape code; `is_retryable` predicate definitions; alert calls inside iteration bodies (forbidden — would violate single-alert rule); `max_attempts` / `backoff_secs` config reads.
+
+**Status:** Active.
+
+**Implemented in Giám sát:** No (project-local). Worker self-checks during EXECUTE (8 unit tests for `is_retryable` + integration tests asserting exactly 1 alert POST after N retries). Giám sát soi PR diff for retry-related changes; if PR adds a second `alert.send` / `send_with_base` call site outside `core::run::run`, flag as INV-20 violation.
+
+---
+
 ## How INV are checked
 
 1. Worker pushes PR.

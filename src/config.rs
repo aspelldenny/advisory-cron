@@ -37,6 +37,12 @@ pub struct Config {
     /// write this block. Sếp manually adds `[alert.telegram]` to enable.
     #[serde(default)]
     pub alert: Option<AlertConfig>,
+    /// Optional retry config. Absent by default — retry is opt-in.
+    /// Old configs (Phase 1 + Phase 2.1) without `[retry]` block deserialize
+    /// as `None` (backwards-compat preserved via `#[serde(default)]`).
+    /// When absent, behavior is single-fire (Phase 2.1 semantics).
+    #[serde(default)]
+    pub retry: Option<RetryConfig>,
 }
 
 /// `[task]` block — what to run.
@@ -77,6 +83,20 @@ pub struct HeartbeatConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AlertConfig {
     pub telegram: Option<TelegramConfig>,
+}
+
+/// `[retry]` block. Optional — retry is opt-in. When absent, behavior is
+/// single-fire (1 attempt, no retry), preserving Phase 2.1 semantics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetryConfig {
+    /// Maximum number of fire attempts. `1` = no retry (single attempt).
+    /// `≥ 2` = retry up to (max_attempts - 1) times after initial failure.
+    /// Validation: must be ≥ 1.
+    pub max_attempts: u32,
+    /// Seconds to sleep between attempts. `0` = retry immediately.
+    /// Validation: must be ≤ 3600 (sanity cap, prevent freezing launchd
+    /// job for a day via typo).
+    pub backoff_secs: u64,
 }
 
 /// `[alert.telegram]` block. Either `bot_token` (inline) OR `bot_token_file`
@@ -137,6 +157,22 @@ impl Config {
                 _ => {}
             }
         }
+        // Retry config validation (Phase 2.2).
+        if let Some(retry) = &self.retry {
+            if retry.max_attempts < 1 {
+                anyhow::bail!(
+                    "[retry].max_attempts must be ≥ 1 (got {})",
+                    retry.max_attempts
+                );
+            }
+            if retry.backoff_secs > 3600 {
+                anyhow::bail!(
+                    "[retry].backoff_secs sanity cap exceeded — got {} (max 3600 = 1 hour). \
+                     Use a shorter backoff or disable retry by removing the [retry] block.",
+                    retry.backoff_secs
+                );
+            }
+        }
         Ok(())
     }
 
@@ -157,6 +193,9 @@ impl Config {
             // Alert is opt-in. `advisory-cron init` does NOT write [alert] block.
             // Sếp adds it manually after creating the bot token.
             alert: None,
+            // Retry is opt-in. `advisory-cron init` does NOT write [retry] block.
+            // Sếp adds it manually when transient failures need retry handling.
+            retry: None,
         }
     }
 
@@ -301,6 +340,7 @@ mod tests {
                 log_path: PathBuf::from("/tmp/hb.jsonl"),
             },
             alert: None,
+            retry: None,
         };
         let err = cfg.validate().unwrap_err();
         assert!(format!("{err:#}").contains("hour"));
@@ -323,6 +363,7 @@ mod tests {
                 log_path: PathBuf::from("/tmp/hb.jsonl"),
             },
             alert: None,
+            retry: None,
         };
         let err = cfg.validate().unwrap_err();
         assert!(format!("{err:#}").contains("minute"));
@@ -549,5 +590,100 @@ bot_token = "tok"
         let err = cfg.validate().unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("chat_id"), "got: {msg}");
+    }
+
+    // ---------------------------------------------------------------------------
+    // P009 — retry config (backwards compat + validation)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn load_without_retry_block_gives_none() {
+        // Old config without [retry] block must still parse cleanly (backwards-compat).
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, base_toml()).unwrap();
+        let cfg = Config::load(&path).unwrap();
+        assert!(
+            cfg.retry.is_none(),
+            "old config without [retry] block must deserialize retry as None"
+        );
+    }
+
+    #[test]
+    fn load_with_retry_block() {
+        let raw = format!(
+            r#"{}
+[retry]
+max_attempts = 3
+backoff_secs = 5
+"#,
+            base_toml()
+        );
+        let cfg: Config = toml::from_str(&raw).unwrap();
+        cfg.validate().unwrap();
+        let retry = cfg.retry.expect("retry block must be Some");
+        assert_eq!(retry.max_attempts, 3);
+        assert_eq!(retry.backoff_secs, 5);
+    }
+
+    #[test]
+    fn validate_retry_zero_attempts_returns_err() {
+        let raw = format!(
+            r#"{}
+[retry]
+max_attempts = 0
+backoff_secs = 5
+"#,
+            base_toml()
+        );
+        let cfg: Config = toml::from_str(&raw).unwrap();
+        let err = cfg.validate().unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("max_attempts"),
+            "expected max_attempts error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_retry_excessive_backoff_returns_err() {
+        let raw = format!(
+            r#"{}
+[retry]
+max_attempts = 2
+backoff_secs = 7200
+"#,
+            base_toml()
+        );
+        let cfg: Config = toml::from_str(&raw).unwrap();
+        let err = cfg.validate().unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("backoff_secs"),
+            "expected backoff_secs error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn load_with_retry_and_alert() {
+        // Both [retry] and [alert.telegram] blocks present — no interference.
+        let raw = format!(
+            r#"{}
+[alert.telegram]
+chat_id = "123"
+bot_token = "testtoken"
+
+[retry]
+max_attempts = 2
+backoff_secs = 10
+"#,
+            base_toml()
+        );
+        let cfg: Config = toml::from_str(&raw).unwrap();
+        cfg.validate().unwrap();
+        assert!(cfg.alert.is_some(), "alert must be Some");
+        let retry = cfg.retry.expect("retry must be Some");
+        assert_eq!(retry.max_attempts, 2);
+        assert_eq!(retry.backoff_secs, 10);
     }
 }

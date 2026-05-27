@@ -6,6 +6,10 @@
 
 ---
 
+## P009 — Retry policy (Phase 2.2) shipped 2026-05-27
+
+- 2026-05-27 P009: Retry policy Phase 2.2 shipped (RetryConfig + Config::retry field; is_retryable(exit_code) private fn; for-loop retry in core/run.rs; two-match heartbeat-completeness invariant preserved; alert moved outside loop (1 per invocation INV-20); heartbeat schema unchanged; 133 tests; 3.9MB binary; runner.rs test helper only structural change) → see docs/discoveries/P009.md
+
 ## P008 — Telegram alert on task failure shipped 2026-05-27
 
 - 2026-05-27 P008: Telegram alert Phase 2.1 shipped (src/alert.rs env-free; AlertConfig + TelegramConfig config schema; core::run wired with env-var-at-call-site seam; INV-19; wiremock dev-dep; 116 tests total +22 new; binary 3.9MB; Constraint #1 + #11 satisfied) → see docs/discoveries/P008.md

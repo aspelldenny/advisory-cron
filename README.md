@@ -133,9 +133,24 @@ bot_token = "<token from @BotFather>"
 
 Alert is best-effort: a network blip will not fail the task. The heartbeat JSONL remains the durable failure record. INV-19 governs the alert HTTP boundary (10s timeout, log-warn-not-bail).
 
+## Phase 2.2 — Retry policy (opt-in)
+
+When a task fails with a transient error (network blip, rate limit, etc.), advisory-cron can re-fire it before alerting. Add `[retry]` to your config:
+
+```toml
+[retry]
+max_attempts = 3        # total fires per run; 1 = no retry
+backoff_secs = 30       # seconds between attempts (0..=3600)
+```
+
+- Each attempt writes 1 heartbeat line (so `advisory-cron status` shows the full trail)
+- Telegram alert fires AT MOST ONCE per `run` invocation (no per-attempt spam)
+- Exit codes 1-127 are retryable; signal-killed (≥128) and spawn-failures (-1) are NOT retried
+- Without a `[retry]` block, behavior is single-fire (Phase 2.1 baseline)
+
 ## Status
 
-Phase 1 complete + Phase 2.1 (Telegram alert) shipped. Track progress in [`docs/BACKLOG.md`](docs/BACKLOG.md).
+Phase 1 complete + Phase 2.1 (Telegram alert) + Phase 2.2 (retry policy) shipped. Track progress in [`docs/BACKLOG.md`](docs/BACKLOG.md).
 
 ## License
 
