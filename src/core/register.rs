@@ -155,4 +155,85 @@ mod tests {
         );
         assert!(result.is_err());
     }
+
+    // INV-12 specific attack-class tests — verify pre-flight rejection BEFORE
+    // LaunchctlClient invocation (bootstrap_calls must be 0 on rejection).
+
+    #[test]
+    fn register_rejects_label_with_whitespace() {
+        let dir = TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("HOME", dir.path());
+        }
+        let client = NoopLaunchctl::default();
+        let result = run(
+            RegisterArgs {
+                label: "foo bar".to_string(),
+                schedule: None,
+                config_path: None,
+            },
+            &client,
+        );
+        assert!(
+            result.is_err(),
+            "label with whitespace must be rejected at pre-flight (INV-12)"
+        );
+        assert_eq!(
+            client.bootstrap_calls.lock().unwrap().len(),
+            0,
+            "pre-flight rejection must occur before LaunchctlClient invocation"
+        );
+    }
+
+    #[test]
+    fn register_rejects_label_with_path_separator() {
+        let dir = TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("HOME", dir.path());
+        }
+        let client = NoopLaunchctl::default();
+        let result = run(
+            RegisterArgs {
+                label: "foo/bar".to_string(),
+                schedule: None,
+                config_path: None,
+            },
+            &client,
+        );
+        assert!(
+            result.is_err(),
+            "label with `/` must be rejected — path traversal vector (INV-12)"
+        );
+        assert_eq!(
+            client.bootstrap_calls.lock().unwrap().len(),
+            0,
+            "pre-flight rejection must occur before LaunchctlClient invocation"
+        );
+    }
+
+    #[test]
+    fn register_rejects_label_with_shell_metachar() {
+        let dir = TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("HOME", dir.path());
+        }
+        let client = NoopLaunchctl::default();
+        let result = run(
+            RegisterArgs {
+                label: "foo;rm".to_string(),
+                schedule: None,
+                config_path: None,
+            },
+            &client,
+        );
+        assert!(
+            result.is_err(),
+            "label with `;` must be rejected — shell metachar (INV-12)"
+        );
+        assert_eq!(
+            client.bootstrap_calls.lock().unwrap().len(),
+            0,
+            "pre-flight rejection must occur before LaunchctlClient invocation"
+        );
+    }
 }

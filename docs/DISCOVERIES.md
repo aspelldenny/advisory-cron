@@ -6,6 +6,8 @@
 
 ---
 
+- 2026-05-27 P011: Sprint debt cleanup shipped (INV-12 label sanitization pre-flight confirmed already in place in core::register::run + core::unregister::run — BACKLOG debt items 1+2 were stale; +3 named attack-class tests added for register pre-flight; .git/hooks/pre-commit DISCOVERIES regex aligned with CLAUDE.md doctrine list-item form, legacy H2 kept for backwards-compat; 141→144 tests; item 3 fire_task no-timeout stays deferred; no INV/schema/dep change) → see docs/discoveries/P011.md
+
 ## P010 — Crash-safe heartbeat (Phase 2.3) shipped 2026-05-27 — SPRINT COMPLETE
 
 - 2026-05-27 P010: Crash-safe heartbeat Phase 2.3 shipped (temp+fsync+rename atomic protocol in `append`; `read_last_n` last-line-tolerate + mid-file-fail-loud; INV-21; tempfile dev→runtime; 8 new tests; 141 total; binary 3.9MB; sprint closes — Phase 1+2 all 10 phiếu shipped) → see docs/discoveries/P010.md
