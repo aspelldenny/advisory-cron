@@ -6,6 +6,44 @@
 
 ---
 
+## 2026-05-27 — P002: Phase 1.2 — Config schema (TOML + serde) + wire `init` handler
+
+**Phiếu:** P002 (Tầng 1 — introduces config schema, touched by every subsequent subcommand)
+
+**Module added:**
+- `src/config.rs` — `Config`, `TaskConfig`, `ScheduleConfig` (untagged enum), `HeartbeatConfig` structs; `load`, `default_for_home`, `write_default` functions. Zero new dependencies (uses `serde` + `toml` already in `Cargo.toml`).
+
+**Config schema:**
+- 3 TOML blocks: `[task]` (command, args, working_dir), `[schedule]` (cron expr OR calendar hour/minute), `[heartbeat]` (log_path)
+- `[schedule]` uses `#[serde(untagged)]` enum — serde discriminates by field presence. Both variants round-trip cleanly.
+- Default path: `~/.config/advisory-cron/config.toml` (hardcoded per PROJECT.md hard line #3)
+- Validation: empty command rejected; Calendar hour 0–23, minute 0–59
+
+**CLI: `advisory-cron init` wired:**
+- `src/cli/init.rs` rewritten: calls `Config::write_default`, maps exit codes per ARCHITECTURE.md spec
+- Exit 0 on success, exit 2 on config-exists-without-force + IO errors, exit 1 (via `Err`) on `$HOME` unset
+- Stdout: `wrote default config to <path>`
+
+**Tests added:**
+- 9 unit tests in `src/config.rs` (schedule parsing, validation failures, write_default round-trip/overwrite)
+- 4 integration tests in `tests/cli_init.rs` (write success, refuse overwrite, force overwrite, TOML parseable)
+
+**Docs updated (Tầng 1):**
+- `docs/ARCHITECTURE.md` — new §Config schema section; §Modules table `src/config.rs` + `src/cli/init.rs` marked 1.2 ✅; §Phase status updated
+
+**Discovery note:**
+- `#[serde(untagged)]` enum confirmed working with TOML 0.8 — cron-shape and calendar-shape discriminate correctly. No fallback to tagged variant needed.
+- Added `validate_rejects_invalid_minute` test (not in phiếu's 8-test count) — natural companion to `validate_rejects_invalid_hour`. Total: 9 unit tests.
+- `pub fn load` carries `#[allow(dead_code)]` to suppress Rust 2024 binary-crate dead_code warning on forward-declared API (will be called by Phase 1.3 `register`).
+
+**Acceptance (all ✅):**
+- `cargo build --release` — zero warnings
+- `cargo test --all` — 16/16 pass (9 unit + 3 cli_help regression + 4 cli_init)
+- `cargo clippy --all-targets -- -D warnings` — clean
+- `cargo fmt --check` — no diff
+
+---
+
 ## 2026-05-27 — P001: Phase 1.1 — Scaffold + CLI surface (clap derive)
 
 **Phiếu:** P001 (Tầng 1 — defines CLI contract for entire tool)

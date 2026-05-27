@@ -34,7 +34,7 @@ Planned module layout for Phase 1. Worker may adjust per phiếu's spec (Archite
 |--------|---------|-------------|
 | `src/main.rs` | clap-derive CLI entry point. Parses subcommand + dispatches to `cli::*` handlers. | 1.1 ✅ |
 | `src/cli/mod.rs` | Commands enum + dispatch fn routing to per-subcommand handlers. | 1.1 ✅ |
-| `src/cli/init.rs` | `advisory-cron init` — write default config to `~/.config/advisory-cron/config.toml`. Skeleton shipped 1.1; impl deferred to 1.2. | 1.1 skeleton ✅ → impl 1.2 |
+| `src/cli/init.rs` | `advisory-cron init` — write default config to `~/.config/advisory-cron/config.toml`. Skeleton shipped 1.1; impl shipped 1.2. | 1.2 ✅ |
 | `src/cli/register.rs` | `advisory-cron register` — generate plist + `launchctl bootstrap`. Skeleton shipped 1.1; impl deferred to 1.3. | 1.1 skeleton ✅ → impl 1.3 |
 | `src/cli/unregister.rs` | `advisory-cron unregister` — `launchctl bootout` + remove plist. Skeleton shipped 1.1; impl deferred to 1.3. | 1.1 skeleton ✅ → impl 1.3 |
 | `src/cli/run.rs` | `advisory-cron run` — fire task once, write heartbeat. Skeleton shipped 1.1; impl deferred to 1.4. | 1.1 skeleton ✅ → impl 1.4 |
@@ -43,7 +43,7 @@ Planned module layout for Phase 1. Worker may adjust per phiếu's spec (Archite
 | `src/core/mod.rs` | Pure functions called by BOTH CLI handlers and MCP tool handlers. Zero CLI/MCP coupling. Introduced 1.7 (may require touch-up to 1.2-1.5 handlers to extract their core logic). | 1.7 |
 | `src/mcp/server.rs` | MCP server bootstrap (handshake, transport, tool registry). SDK choice TBD by Architect (likely `rmcp`). | 1.7 |
 | `src/mcp/tools.rs` | 5 MCP tool definitions (input schema + handler → `core::*`). | 1.7 |
-| `src/config.rs` | TOML config schema (serde-derive). Validation on load. | 1.2 |
+| `src/config.rs` | TOML config schema (serde-derive). Validation on load. | 1.2 ✅ |
 | `src/launchd.rs` | Plist XML generation + `launchctl` shell invocation wrappers. macOS-only. | 1.3 |
 | `src/runner.rs` | `tokio::process::Command` task spawn + capture stdout/stderr/exit. | 1.4 |
 | `src/heartbeat.rs` | JSONL append + read-last-N. | 1.4 |
@@ -76,6 +76,63 @@ Exit codes:
 | 4 | Task fire failed (subcommand `run` only) |
 | 5 | MCP transport error (subcommand `mcp` only — stdio closed, malformed JSON-RPC) |
 | 130 | SIGINT (Ctrl+C) |
+
+---
+
+## Config schema (Phase 1.2)
+
+Advisory-cron reads a single TOML config file. Default path: `~/.config/advisory-cron/config.toml`. The path is currently hardcoded (no repo-local discovery in Phase 1 — deferred per PROJECT.md hard line #3).
+
+### Full schema
+
+```toml
+[task]
+command = "claude"
+args = ["-p", "/advisory-scan"]
+working_dir = "/Users/<user>"
+
+[schedule]
+# Option A — cron expression (5-field: min hour dom mon dow):
+cron = "0 9 * * *"
+# Option B — launchd-friendly calendar (mutually exclusive with cron):
+# hour = 9
+# minute = 0
+
+[heartbeat]
+log_path = "/Users/<user>/.local/state/advisory-cron/heartbeat.jsonl"
+```
+
+### Field reference
+
+| Block | Field | Type | Required | Description | Default (init) |
+|-------|-------|------|----------|-------------|----------------|
+| `[task]` | `command` | `string` | yes | Executable to run (PATH-resolved) | `"claude"` |
+| `[task]` | `args` | `string[]` | yes | Args passed to `command` | `["-p", "/advisory-scan"]` |
+| `[task]` | `working_dir` | `path` | yes | Working directory for command spawn | `$HOME` |
+| `[schedule]` | `cron` | `string` | one-of | Standard cron expression | — |
+| `[schedule]` | `hour` | `u8 (0–23)` | one-of | Calendar hour for launchd `StartCalendarInterval` | `9` |
+| `[schedule]` | `minute` | `u8 (0–59)` | one-of | Calendar minute | `0` |
+| `[heartbeat]` | `log_path` | `path` | yes | Append-only JSONL heartbeat file | `~/.local/state/advisory-cron/heartbeat.jsonl` |
+
+### Schedule variants
+
+`[schedule]` is a serde `#[serde(untagged)]` enum. Serde discriminates by field presence:
+- If `cron` field present → `ScheduleConfig::Cron` (standard cron expression)
+- If `hour` + `minute` fields present → `ScheduleConfig::Calendar` (launchd `StartCalendarInterval`)
+- Both forms round-trip cleanly through `toml::to_string_pretty` / `toml::from_str`. Confirmed via unit tests in `src/config.rs`.
+
+### Validation
+
+Beyond serde structural check, `Config::validate()` enforces:
+- `task.command` non-empty after trim
+- `schedule.hour` ∈ 0..=23 (Calendar variant only)
+- `schedule.minute` ∈ 0..=59 (Calendar variant only)
+
+Validation errors → exit code 2 per §CLI surface exit codes.
+
+### Source module
+
+`src/config.rs` — `Config`, `TaskConfig`, `ScheduleConfig`, `HeartbeatConfig` structs + `load`, `default_for_home`, `write_default` functions. Zero new dependencies (uses `serde` + `toml` already in `Cargo.toml`).
 
 ---
 
@@ -209,7 +266,7 @@ Error categories (anyhow context chain):
 
 ## Phase status
 
-- 🚧 **Phase 1** — In progress. Phase 1.1 shipped: CLI scaffold (5 subcommand stubs, clap derive). Phases 1.2–1.7 pending.
+- 🚧 **Phase 1** — In progress. Phase 1.1 shipped: CLI scaffold (5 subcommand stubs, clap derive). Phase 1.2 shipped: config schema (TOML + serde, `advisory-cron init` wired). Phases 1.3–1.7 pending.
 - ⏸️ **Phase 2** — Deferred. Trigger: Phase 1 dogfood xanh 3 ngày.
 - ⏸️ **Phase 3** — Deferred. Trigger: Phase 2 ship + need Linux support.
 

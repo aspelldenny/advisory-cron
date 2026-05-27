@@ -4,6 +4,7 @@
 //! returns appropriate exit code per ARCHITECTURE.md §CLI surface exit codes.
 
 mod cli;
+mod config;
 
 use clap::Parser;
 use std::process::ExitCode;
