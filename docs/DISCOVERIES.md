@@ -6,6 +6,10 @@
 
 ---
 
+## P007 — README + ARCHITECTURE post-ship docs polish 2026-05-27
+
+- 2026-05-27 P007: README + ARCHITECTURE post-ship polish (6-step CLI quick-start; Sub-mechanism A verify step added; MCP smoke verified exit 0; "What advisory-cron fires" section; 0 schema drift; 22 modules confirmed; Phase 1 Code COMPLETE status) → see docs/discoveries/P007.md
+
 ## P006 — MCP server wrapper + core/* extraction shipped 2026-05-27
 
 - 2026-05-27 P006: MCP server wrapper (rmcp 1.7.0 stdio; 5 tools; INV-18; core/* extraction for dual-surface parity; 94 tests; 2.1MB binary; ServerInfo/Implementation non-exhaustive structs require constructors; no lib.rs means integration tests are subprocess-only) → see docs/discoveries/P006.md

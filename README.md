@@ -29,11 +29,17 @@ advisory-cron init
 # 2. Register a launchd plist that fires daily at 09:00
 advisory-cron register --label advisory-scan-daily --schedule "0 9 * * *"
 
-# 3. Fire the configured task immediately (one-shot test)
+# 3. Verify the plist is loaded
+launchctl list | grep com.advisorycron
+
+# 4. Fire the configured task immediately (one-shot test)
 advisory-cron run
 
-# 4. Show launchd state + last 5 heartbeats
+# 5. Show launchd state + last 5 heartbeats
 advisory-cron status --label advisory-scan-daily
+
+# 6. Unregister when done testing
+advisory-cron unregister --label advisory-scan-daily
 ```
 
 ## MCP server (Claude Desktop / Claude Code)
@@ -78,9 +84,30 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 
 Expected: JSON response with `"serverInfo":{"name":"advisory-cron",...}`.
 
+## What advisory-cron fires
+
+Out of the box, `advisory-cron init` writes a config that runs `claude -p /advisory-scan` (sos-kit's vulnerability scanner) daily at 09:00. To fire something else, edit `~/.config/advisory-cron/config.toml`:
+
+```toml
+[task]
+command = "claude"
+args = ["-p", "/my-slash-command"]
+working_dir = "/Users/<YOU>/some-repo"
+label = "my-task"
+
+[schedule]
+hour = 9
+minute = 0
+
+[heartbeat]
+log_path = "/Users/<YOU>/.local/state/advisory-cron/heartbeat.jsonl"
+```
+
+Re-register after editing: `advisory-cron unregister --label my-task && advisory-cron register --label my-task`.
+
 ## Status
 
-Phase 1.7 shipped — CLI + MCP wrapper (stdio) both operational. Track progress in [`docs/BACKLOG.md`](docs/BACKLOG.md).
+Phase 1 complete — CLI + MCP wrapper (stdio) shipped; awaiting Sếp dogfood. Track progress in [`docs/BACKLOG.md`](docs/BACKLOG.md).
 
 ## License
 
