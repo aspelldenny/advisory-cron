@@ -5,7 +5,9 @@
 
 mod cli;
 mod config;
+mod heartbeat;
 mod launchd;
+mod runner;
 
 use clap::Parser;
 use std::process::ExitCode;

@@ -6,6 +6,50 @@
 
 ---
 
+## 2026-05-27 — P004: Phase 1.4 — Task runner + heartbeat JSONL + wire `run` handler
+
+**Phiếu:** P004 (Tầng 1 — 2 new modules, new dep `serde_json`, new optional config field `task.label`, new CLI flag `run --config`, INVARIANTS.md updated)
+
+**New dependency:**
+- `serde_json = "1"` promoted from transitive (via reqwest) to explicit in `[dependencies]`. Required for `serde_json::to_string` / `serde_json::from_str` in `heartbeat.rs`. Marginal binary delta = 0 (already compiled transitively). Per RULES.md Tầng 1 row: CHANGELOG entry citing crate + reason.
+
+**Modules added:**
+- `src/runner.rs` — `RunResult` struct; `fire_task(config) -> Result<RunResult>` spawns task via `tokio::process::Command`, captures stdout/stderr/exit-code/duration. Signal-killed → exit_code=-1. Spawn failure → `anyhow::Error` (caller builds spawn-fail heartbeat). 3 unit tests.
+- `src/heartbeat.rs` — `HeartbeatRecord` struct (durable schema: ts, label, exit_code, duration_ms, stdout_tail, stderr_tail); `append(path, record)` (JSONL, auto-creates parent dir); `read_last_n(path, n)` (skips malformed lines); `tail_utf8(s, max_bytes)` (char-boundary snap, no grapheme dep). 7 unit tests.
+
+**CLI: `advisory-cron run` wired (Phase 1.4 acceptance):**
+- `src/cli/run.rs` rewritten: loads config via `--config <path>` or default `~/.config/advisory-cron/config.toml`; fires task via `runner::fire_task`; builds `HeartbeatRecord`; appends to `heartbeat.log_path`.
+- **`default_config_path` bails on `$HOME` unset** — mirrors `register.rs` pattern, never silently falls back to `/` (P004 V2 Turn 1 Architect decision).
+- Exit codes: 0 = task success; 2 = config load fail OR `$HOME` unset; 4 = task non-zero exit OR spawn-fail. Heartbeat write failure = stderr warning only, never changes exit code.
+- `--config <path>` flag added — declared in `run::Args` (NOT in `cli/mod.rs`, per newtype dispatch constraint). `git diff src/cli/mod.rs` empty.
+
+**Config schema change (`src/config.rs`):**
+- `TaskConfig` gains `pub label: Option<String>` with `#[serde(default)]` — backward compat (old configs without `label` field deserialize to `None`). `default_for_home` seeds `label: Some("advisory-cron")` so `advisory-cron init` writes the new field visibly.
+
+**INVARIANTS.md updated:**
+- Appended INV-14 (child process spawn boundary), INV-15 (heartbeat file write boundary), INV-16 (JSON serialization boundary). Per RULES.md:22 — security boundary touched.
+
+**Tests added:**
+- 3 unit tests in `src/runner.rs` (echo success, nonexistent binary error, non-zero exit)
+- 7 unit tests in `src/heartbeat.rs` (serde roundtrip, append creates dir+file, append+read roundtrip, missing file returns empty, malformed line skip, tail_utf8 variants)
+- 3 unit tests in `src/config.rs` (label absent → None, label present → Some, default_for_home includes label)
+- 4 integration tests in `tests/cli_run.rs` (echo success exit 0 + heartbeat written, failing task exit 4, spawn-fail exit 4 + exit_code=-1 in heartbeat, missing config exit 2)
+- Total: 51 tests (34 unit + 3 cli_help regression + 4 cli_init regression + 6 cli_register regression + 4 cli_run)
+
+**Docs updated (Tầng 1):**
+- `docs/ARCHITECTURE.md` — §Modules table marks `src/runner.rs` + `src/heartbeat.rs` 1.4 ✅; §Config schema field reference adds `task.label` row + TOML block updated; §CLI surface table `run` row updated to show `--config <path>` flag; §Phase status updated to 1.4 shipped
+- `docs/security/INVARIANTS.md` — INV-14..INV-16 appended
+
+**Acceptance (all ✅):**
+- `cargo build --release` — zero warnings, binary 1.1MB
+- `cargo test --all` — 51/51 pass (33 baseline + 18 new)
+- `cargo clippy --all-targets -- -D warnings` — clean
+- `cargo fmt --check` — no diff
+- `git diff src/cli/mod.rs` — empty (Constraint #1 hard rule satisfied)
+- `env -u HOME advisory-cron run` → exit 2 with `$HOME environment variable is not set` (Constraint #16 confirmed)
+
+---
+
 ## 2026-05-27 — P003: Phase 1.3 — launchd plist generator + `register`/`unregister` handlers
 
 **Phiếu:** P003 (Tầng 1 — module added, CLI flags added, schedule type relaxed, plist schema spec, exit code 3 first use, INVARIANTS.md updated)

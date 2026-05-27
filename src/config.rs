@@ -35,11 +35,17 @@ pub struct Config {
 }
 
 /// `[task]` block — what to run.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TaskConfig {
     pub command: String,
     pub args: Vec<String>,
     pub working_dir: PathBuf,
+    /// Optional label identifying this task in heartbeat records.
+    /// Distinct from `register --label` (which becomes the launchd plist Label key).
+    /// Phase 2 alert may use this to distinguish multiple advisory-cron configs reporting
+    /// to the same Telegram chat. Defaults to "advisory-cron" when omitted.
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 /// `[schedule]` block — when to run.
@@ -102,6 +108,7 @@ impl Config {
                 command: "claude".to_string(),
                 args: vec!["-p".to_string(), "/advisory-scan".to_string()],
                 working_dir: home.to_path_buf(),
+                label: Some("advisory-cron".to_string()),
             },
             schedule: ScheduleConfig::Calendar { hour: 9, minute: 0 },
             heartbeat: HeartbeatConfig {
@@ -241,6 +248,7 @@ mod tests {
                 command: "claude".into(),
                 args: vec![],
                 working_dir: PathBuf::from("/tmp"),
+                label: None,
             },
             schedule: ScheduleConfig::Calendar {
                 hour: 25,
@@ -261,6 +269,7 @@ mod tests {
                 command: "claude".into(),
                 args: vec![],
                 working_dir: PathBuf::from("/tmp"),
+                label: None,
             },
             schedule: ScheduleConfig::Calendar {
                 hour: 9,
@@ -316,5 +325,60 @@ mod tests {
         Config::write_default(&path, home, true).unwrap();
         let cfg = Config::load(&path).unwrap();
         assert_eq!(cfg.task.command, "claude");
+    }
+
+    // ---------------------------------------------------------------------------
+    // P004 — task.label field (backward compat + default_for_home)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn task_label_absent_in_toml_deserializes_to_none() {
+        // Old config without label field must still parse cleanly (backward compat).
+        let raw = r#"
+            [task]
+            command = "claude"
+            args = []
+            working_dir = "/tmp"
+
+            [schedule]
+            hour = 9
+            minute = 0
+
+            [heartbeat]
+            log_path = "/tmp/hb.jsonl"
+        "#;
+        let cfg: Config =
+            toml::from_str(raw).expect("old config must still parse with #[serde(default)]");
+        assert_eq!(
+            cfg.task.label, None,
+            "missing label field should deserialize to None"
+        );
+    }
+
+    #[test]
+    fn task_label_present_in_toml_deserializes_correctly() {
+        let raw = r#"
+            [task]
+            command = "claude"
+            args = []
+            working_dir = "/tmp"
+            label = "my-task"
+
+            [schedule]
+            hour = 9
+            minute = 0
+
+            [heartbeat]
+            log_path = "/tmp/hb.jsonl"
+        "#;
+        let cfg: Config = toml::from_str(raw).expect("config with label must parse");
+        assert_eq!(cfg.task.label, Some("my-task".to_string()));
+    }
+
+    #[test]
+    fn default_for_home_includes_advisory_cron_label() {
+        let dir = TempDir::new().unwrap();
+        let cfg = Config::default_for_home(dir.path());
+        assert_eq!(cfg.task.label, Some("advisory-cron".to_string()));
     }
 }

@@ -263,6 +263,7 @@ mod tests {
                 command: "claude".into(),
                 args: vec!["-p".into(), "/advisory-scan".into()],
                 working_dir: PathBuf::from("/Users/test"),
+                label: None,
             },
             schedule: ScheduleConfig::Calendar { hour: 9, minute: 0 },
             heartbeat: HeartbeatConfig {

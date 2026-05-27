@@ -45,8 +45,8 @@ Planned module layout for Phase 1. Worker may adjust per phiếu's spec (Archite
 | `src/mcp/tools.rs` | 5 MCP tool definitions (input schema + handler → `core::*`). | 1.7 |
 | `src/config.rs` | TOML config schema (serde-derive). Validation on load. | 1.2 ✅ |
 | `src/launchd.rs` | Plist XML generation + `launchctl` shell invocation wrappers. macOS-only. `LaunchctlClient` trait + `RealLaunchctl`/`NoopLaunchctl` impls + `current_uid()` helper. | 1.3 ✅ |
-| `src/runner.rs` | `tokio::process::Command` task spawn + capture stdout/stderr/exit. | 1.4 |
-| `src/heartbeat.rs` | JSONL append + read-last-N. | 1.4 |
+| `src/runner.rs` | `tokio::process::Command` task spawn + capture stdout/stderr/exit. `RunResult` struct. | 1.4 ✅ |
+| `src/heartbeat.rs` | JSONL append + read-last-N. `HeartbeatRecord` struct (durable schema). `tail_utf8` helper. | 1.4 ✅ |
 
 *(Phase 2 adds `src/alert.rs` for Telegram + `src/retry.rs` for retry policy.)*
 
@@ -61,7 +61,7 @@ Planned module layout for Phase 1. Worker may adjust per phiếu's spec (Archite
 | `init` | `--force` (overwrite) | Write default config | 1.2 |
 | `register` | `--schedule <cron>` (optional — overrides config; `M H * * *` daily form only) `--label <name>` `--config <path>` (optional — overrides default config path) | Generate + load plist | 1.3 ✅ |
 | `unregister` | `--label <name>` `--config <path>` (reserved, unused P003) | Remove + unload plist (idempotent) | 1.3 ✅ |
-| `run` | (no args) | Fire configured task once | 1.4 |
+| `run` | `--config <path>` (optional — overrides default config path) | Fire configured task once, write heartbeat | 1.4 ✅ |
 | `status` | `--json` (machine output) | Show next fire + last heartbeat | 1.5 |
 | `mcp` | (no args — stdio only) | Start MCP server on stdin/stdout; serves 5 tools mirroring above | 1.7 |
 
@@ -90,6 +90,7 @@ Advisory-cron reads a single TOML config file. Default path: `~/.config/advisory
 command = "claude"
 args = ["-p", "/advisory-scan"]
 working_dir = "/Users/<user>"
+label = "advisory-scan-daily"  # optional — heartbeat label; defaults to "advisory-cron"
 
 [schedule]
 # Option A — cron expression (5-field: min hour dom mon dow):
@@ -109,6 +110,7 @@ log_path = "/Users/<user>/.local/state/advisory-cron/heartbeat.jsonl"
 | `[task]` | `command` | `string` | yes | Executable to run (PATH-resolved) | `"claude"` |
 | `[task]` | `args` | `string[]` | yes | Args passed to `command` | `["-p", "/advisory-scan"]` |
 | `[task]` | `working_dir` | `path` | yes | Working directory for command spawn | `$HOME` |
+| `[task]` | `label` | `string (optional)` | no | Heartbeat label for this config — distinct from `register --label` plist label | `"advisory-cron"` |
 | `[schedule]` | `cron` | `string` | one-of | Standard cron expression | — |
 | `[schedule]` | `hour` | `u8 (0–23)` | one-of | Calendar hour for launchd `StartCalendarInterval` | `9` |
 | `[schedule]` | `minute` | `u8 (0–59)` | one-of | Calendar minute | `0` |
@@ -272,7 +274,7 @@ Error categories (anyhow context chain):
 
 ## Phase status
 
-- 🚧 **Phase 1** — In progress. Phase 1.1 shipped: CLI scaffold (5 subcommand stubs, clap derive). Phase 1.2 shipped: config schema (TOML + serde, `advisory-cron init` wired). Phase 1.3 shipped: launchd plist generator + `register`/`unregister` handlers (newtype dispatch, LaunchctlClient trait, idempotent unregister, zero new dep). Phases 1.4–1.7 pending.
+- 🚧 **Phase 1** — In progress. Phase 1.1 shipped: CLI scaffold (5 subcommand stubs, clap derive). Phase 1.2 shipped: config schema (TOML + serde, `advisory-cron init` wired). Phase 1.3 shipped: launchd plist generator + `register`/`unregister` handlers (newtype dispatch, LaunchctlClient trait, idempotent unregister, zero new dep). Phase 1.4 shipped: task runner + heartbeat JSONL (`src/runner.rs` + `src/heartbeat.rs` + `run --config` flag wired; `serde_json` explicit dep; `task.label` optional config field). Phases 1.5–1.7 pending.
 - ⏸️ **Phase 2** — Deferred. Trigger: Phase 1 dogfood xanh 3 ngày.
 - ⏸️ **Phase 3** — Deferred. Trigger: Phase 2 ship + need Linux support.
 

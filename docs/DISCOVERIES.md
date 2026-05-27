@@ -6,6 +6,10 @@
 
 ---
 
+## P004 — task runner + heartbeat shipped 2026-05-27
+
+- 2026-05-27 P004: Task runner + heartbeat shipped (serde_json explicit dep, runner::fire_task + heartbeat::append/read_last_n, run --config flag + bail-on-$HOME-unset, task.label optional config field, INV-14/15/16 appended; 51 tests total) → see docs/discoveries/P004.md
+
 ## P003 — launchd plist generator + register/unregister shipped 2026-05-27
 
 - 2026-05-27 P003: launchd plist generator + register/unregister wired (newtype dispatch preserved — zero mod.rs edits; LaunchctlClient trait + NoopLaunchctl; idempotent unregister exit 0; simple `M H * * *` cron form only; zero new dep; dead_code annotation removed from Config::load; INVARIANTS.md INV-10..INV-13 appended) → see docs/discoveries/P003.md
