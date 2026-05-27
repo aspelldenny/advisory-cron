@@ -6,6 +6,49 @@
 
 ---
 
+## 2026-05-27 — P005: Phase 1.5 — Status reporter
+
+**Phiếu:** P005 (Tầng 1 — 4 new CLI flags on `status` subcommand per RULES.md:14; `LaunchctlClient` trait additive extension; INV-17 appended for `launchctl print` shell-out boundary; NO new dep)
+
+**CLI: `advisory-cron status` wired (Phase 1.5 acceptance):**
+- `src/cli/status.rs` rewritten: 4 new flags `--label <name>` / `--config <path>` / `--json` / `--last <N>` (default 5); resolves config + queries `launchctl print` + reads last N heartbeats + renders human-readable text or JSON.
+- Label resolution priority: `--label` CLI > `config.task.label` > literal `"advisory-cron"`.
+- Label validation (INV-12 2-point enforcement): pre-flight in `src/cli/status.rs::run` + defense-in-depth inside `RealLaunchctl::print`. Allowlist: ASCII alphanumeric + `-` + `_`.
+- Exit code 0 always (read-only operation); exit 2 for config load failure / `$HOME` unset; exit 1 for invalid label.
+
+**`src/launchd.rs` extended (additive — no breaking change):**
+- `LaunchctlClient` trait gains `print(&self, label: &str) -> Result<LaunchctlPrintOutput>` method.
+- `LaunchctlPrintOutput { raw_stdout: String, not_loaded: bool }` new struct.
+- `RealLaunchctl::print` shells `launchctl print gui/<uid>/com.advisorycron.<label>`; catches "Could not find service" / "No such process" stderr substrings → `not_loaded = true` (renders cleanly, does NOT bubble error).
+- `NoopLaunchctl::print` returns canned fixture matching macOS 15 descriptor format for tests.
+
+**Discovery: macOS 15 launchctl format (P005 V2 pivot):**
+- `parse_next_fire` (private fn in `src/cli/status.rs`) pivoted from timestamp-key search to `descriptor` Hour/Minute extraction. macOS 15 (Darwin 25.5.0) `launchctl print` for `StartCalendarInterval` jobs does NOT expose `next fire` / `next launch` / `run at` timestamps — only the configured `descriptor = { "Hour" => N "Minute" => M }`. Worker empirical capture (P005 Debate Log Turn 1) corrected V1's docs-based guess. Phase 1 acceptance gate satisfied by rendering "Next fire: daily at HH:MM" (configured recurrence).
+
+**INVARIANTS.md updated:**
+- Appended INV-17 (launchctl print shell-out boundary — additive to INV-10's "any future launchctl invocation" coverage). Per RULES.md:22 — security boundary touched.
+
+**Tests added:**
+- 3 unit tests in `src/launchd.rs` (noop print canned-descriptor, real print rejects invalid label, real print rejects empty label)
+- 11 unit tests in `src/cli/status.rs` (is_valid_label allow/reject, parse_next_fire macos15-descriptor/none/empty/hour-only/minute-only/zero-pad/out-of-range, tail_first_n_or_empty empty/truncate)
+- 5 integration tests in `tests/cli_status.rs` (heartbeats+unloaded human, no-heartbeats friendly, --json valid, --last clamps, missing config exit 2)
+- Total: 51 baseline + 19 new = 70 tests
+
+**Docs updated (Tầng 1):**
+- `docs/ARCHITECTURE.md` — §CLI surface `status` row Args column updated (new flags); §Modules table `src/cli/status.rs` row marked shipped 1.5 ✅; `src/launchd.rs` row notes trait extension + descriptor parser; §Phase status updated with Phase 1.5 + macOS 15 discovery.
+- `docs/security/INVARIANTS.md` — INV-17 appended.
+
+**No new dep.** `serde_json` (P004 explicit) + `chrono` (P002 direct) + `clap` (P001 direct) cover all P005 needs.
+
+**Acceptance (all ✅):**
+- `cargo build --release` — zero warnings
+- `cargo test --all` — 70 pass (51 baseline + 19 new)
+- `cargo clippy --all-targets -- -D warnings` — clean
+- `cargo fmt --check` — no diff
+- `git diff src/cli/mod.rs` — empty (Constraint #2 hard rule satisfied)
+
+---
+
 ## 2026-05-27 — P004: Phase 1.4 — Task runner + heartbeat JSONL + wire `run` handler
 
 **Phiếu:** P004 (Tầng 1 — 2 new modules, new dep `serde_json`, new optional config field `task.label`, new CLI flag `run --config`, INVARIANTS.md updated)

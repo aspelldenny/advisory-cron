@@ -148,17 +148,38 @@ fn xml_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// Output of `launchctl print gui/<uid>/com.advisorycron.<label>`.
+/// Returned by `LaunchctlClient::print`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LaunchctlPrintOutput {
+    /// Full stdout captured from launchctl. Caller parses for "Hour"/"Minute"
+    /// keys inside the `descriptor` block (V2 spec — macOS 15 launchctl does
+    /// not expose a "next fire" timestamp, only the configured recurrence).
+    pub raw_stdout: String,
+    /// True when stderr indicated "Could not find service" — label is not currently loaded.
+    /// Caller renders "not loaded" status instead of attempting to parse `raw_stdout`.
+    pub not_loaded: bool,
+}
+
 /// Abstraction over `launchctl` shell-out — production uses real launchctl, tests inject NoopLaunchctl.
 pub trait LaunchctlClient {
     /// `launchctl bootstrap gui/<uid> <plist_path>`.
-    fn bootstrap(&self, plist_path: &Path) -> Result<()>;
+    // existing methods — DO NOT change signatures (V2 fix: bootstrap is 1-arg)
+    fn bootstrap(&self, plist_path: &Path) -> Result<()>; // 1 arg — domain computed internally via current_uid() per P003 V2
 
     /// `launchctl bootout gui/<uid>/<label>`.
     ///
     /// Returns Ok even if launchctl reports "not loaded" — caller decides idempotency.
     /// Errors only on hard launchctl failures (binary missing, spawn fail).
     /// Worker MUST capture stdout+stderr in returned error for diagnostics.
-    fn bootout(&self, label: &str) -> Result<()>;
+    fn bootout(&self, label: &str) -> Result<()>; // unchanged from P003
+
+    /// Query launchd for the loaded job's status. Returns raw stdout for the caller
+    /// to parse (parse format is system-version dependent — see P005 V2 parse_next_fire).
+    /// `label` is the bare label (no `com.advisorycron.` prefix and no `gui/<uid>/`).
+    /// Per INV-12, `label` MUST be ASCII alphanumeric + `-` + `_` only (caller validates;
+    /// implementation re-validates as defense-in-depth).
+    fn print(&self, label: &str) -> Result<LaunchctlPrintOutput>;
 }
 
 /// Production impl — shells out real `launchctl`.
@@ -206,6 +227,54 @@ impl LaunchctlClient for RealLaunchctl {
         }
         Ok(())
     }
+
+    fn print(&self, label: &str) -> Result<LaunchctlPrintOutput> {
+        // Defense-in-depth label sanitization (INV-12). Caller in src/cli/status.rs
+        // also validates — this is the second of 2 enforcement points.
+        if label.is_empty() {
+            anyhow::bail!("invalid label — empty string");
+        }
+        if !label
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            anyhow::bail!("invalid label {label:?} — must be ASCII alphanumeric + '-' + '_'");
+        }
+
+        let uid = current_uid()?;
+        let target = format!("gui/{uid}/com.advisorycron.{label}");
+
+        let output = std::process::Command::new("launchctl")
+            .arg("print")
+            .arg(&target)
+            .output()
+            .with_context(|| format!("failed to spawn launchctl print {target}"))?;
+
+        // launchctl exits non-zero when service not loaded.
+        // Sample stderr (macOS 14+): "Could not find service \"com.advisorycron.<label>\" in domain for ..."
+        // Sample stderr (older): "No such process"
+        // Treat either substring as "not loaded" — render status accordingly, do NOT bubble error.
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("Could not find service") || stderr.contains("No such process") {
+                return Ok(LaunchctlPrintOutput {
+                    raw_stdout: String::new(),
+                    not_loaded: true,
+                });
+            }
+            // Real launchctl error (permission denied, etc.) — bubble up.
+            anyhow::bail!(
+                "launchctl print {target} failed: exit={:?} stderr={}",
+                output.status.code(),
+                stderr
+            );
+        }
+
+        Ok(LaunchctlPrintOutput {
+            raw_stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            not_loaded: false,
+        })
+    }
 }
 
 /// Test impl — records calls; never invokes real launchctl.
@@ -230,6 +299,26 @@ impl LaunchctlClient for NoopLaunchctl {
     fn bootout(&self, label: &str) -> Result<()> {
         self.bootout_calls.lock().unwrap().push(label.to_string());
         Ok(())
+    }
+
+    fn print(&self, _label: &str) -> Result<LaunchctlPrintOutput> {
+        // Canned output matches macOS 15 launchctl format (Worker Turn 1 captured fixture).
+        Ok(LaunchctlPrintOutput {
+            raw_stdout: "gui/501/com.advisorycron.test = {\n\
+                \tstate = not running\n\
+                \tevent triggers = {\n\
+                \t\tcom.advisorycron.test.268435522 => {\n\
+                \t\t\tstream = com.apple.launchd.calendarinterval\n\
+                \t\t\tdescriptor = {\n\
+                \t\t\t\t\"Minute\" => 0\n\
+                \t\t\t\t\"Hour\" => 9\n\
+                \t\t\t}\n\
+                \t\t}\n\
+                \t}\n\
+                }"
+            .to_string(),
+            not_loaded: false,
+        })
     }
 }
 
@@ -398,5 +487,31 @@ mod tests {
         // Test confirms shell-out works; doesn't assert exact value.
         let uid = current_uid().expect("id -u must work in test env");
         assert!(uid > 0, "expected non-root UID in test env, got {uid}");
+    }
+
+    #[test]
+    fn noop_launchctl_print_returns_canned_descriptor_output() {
+        let client = NoopLaunchctl::default(); // V2 fix: unit struct uses Default
+        let result = client.print("test-label").expect("noop never fails");
+        assert!(!result.not_loaded);
+        // V2: assert descriptor Hour/Minute keys present (macOS 15 format)
+        assert!(result.raw_stdout.contains("\"Hour\" => 9"));
+        assert!(result.raw_stdout.contains("\"Minute\" => 0"));
+    }
+
+    #[test]
+    fn real_launchctl_print_rejects_invalid_label() {
+        let client = RealLaunchctl; // V2 fix: unit struct, no ::new()
+        let result = client.print("../etc/passwd");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(format!("{err:#}").contains("invalid label"));
+    }
+
+    #[test]
+    fn real_launchctl_print_rejects_empty_label() {
+        let client = RealLaunchctl; // V2 fix: unit struct, no ::new()
+        let result = client.print("");
+        assert!(result.is_err());
     }
 }

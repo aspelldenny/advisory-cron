@@ -229,6 +229,24 @@ The label becomes part of a filesystem path (`~/Library/LaunchAgents/com.advisor
 
 ---
 
+### INV-17 — `launchctl print` shell-out: label sanitization + discrete arg passing
+
+**Statement:** PR introducing `launchctl print` shell-out (P005 `RealLaunchctl::print`) MUST:
+1. Validate `label` against the INV-12 allowlist (ASCII alphanumeric + `-` + `_`) at BOTH (a) caller in `src/cli/status.rs::run` (pre-flight) and (b) inside `RealLaunchctl::print` impl (defense-in-depth).
+2. Pass `label` as a component of `format!("gui/{uid}/com.advisorycron.{label}")` where `uid: u32` (numeric, parsed via `current_uid()`); the resulting target string is passed as a discrete `.arg()` to `Command::new("launchctl")`. NO `Command::new("sh").arg("-c").arg(format!("launchctl print ... {label}"))` — shell interpolation PROHIBITED.
+
+**Why:** Same threat model as INV-10 / INV-12 — `launchctl print` accepts a target string that contains the label as a path component. Without sanitization, a label like `../foo` or `foo;evil` could either probe unintended services or (if shell-interpolated) inject. `launchctl print` is read-only (no side effect like `bootstrap`), so the impact is limited to information disclosure — still worth defending.
+
+**Implementation (Phase 1.5):** `src/launchd.rs::RealLaunchctl::print` — `format!("gui/{uid}/com.advisorycron.{label}")` where `uid: u32` and `label` is pre-validated. `Command::new("launchctl").arg("print").arg(&target)` — discrete args, no shell. Caller in `src/cli/status.rs::run` validates label via `is_valid_label` helper before invocation.
+
+**Trigger keywords:** `RealLaunchctl::print` call sites, `Command::new("launchctl").arg("print")`, new `launchctl <verb>` shell-outs.
+
+**Status:** Active.
+
+**Implemented in Giám sát:** No (project-local). Worker self-checks.
+
+---
+
 ## How INV are checked
 
 1. Worker pushes PR.
