@@ -5,6 +5,7 @@
 
 mod cli;
 mod config;
+mod launchd;
 
 use clap::Parser;
 use std::process::ExitCode;

@@ -6,6 +6,50 @@
 
 ---
 
+## 2026-05-27 — P003: Phase 1.3 — launchd plist generator + `register`/`unregister` handlers
+
+**Phiếu:** P003 (Tầng 1 — module added, CLI flags added, schedule type relaxed, plist schema spec, exit code 3 first use, INVARIANTS.md updated)
+
+**Module added:**
+- `src/launchd.rs` — `generate_plist` (pure XML builder, 7-key plist matching ARCHITECTURE.md spec), `plist_path_for`, `default_launch_agents_dir`, `LaunchctlClient` trait, `RealLaunchctl` (shells `launchctl bootstrap`/`bootout` via `std::process::Command`), `NoopLaunchctl` (test impl recording calls), `current_uid` (`id -u` shell-out, zero-unsafe, zero-dep). 11 unit tests.
+
+**CLI: `register` + `unregister` wired:**
+- `src/cli/register.rs` rewritten: loads config, generates plist, writes to `~/Library/LaunchAgents/`, bootstraps via `launchctl`. Testable surface via `run_with_deps<L: LaunchctlClient>`.
+- `src/cli/unregister.rs` rewritten: idempotent bootout + plist file removal. Warns on "label not loaded" or "plist already absent" — continues to exit 0. Exit 3 only on hard IO failure.
+- **`--config <path>` flag added to both** — declared inside `Args` struct (NOT on Commands enum) per newtype dispatch pattern confirmed Turn 1 [O1.1]. Zero edits to `src/cli/mod.rs`.
+- **`register --schedule` relaxed from required `String` to `Option<String>`** — config-driven schedule works without redundant CLI flag.
+- Exit codes: register (0=success, 1=$HOME unset, 2=config/cron-parse fail, 3=plist write / launchctl bootstrap fail); unregister (0=success including idempotent, 1=$HOME unset, 3=plist remove IO fail).
+
+**Plist XML schema (7 keys — matches ARCHITECTURE.md §Cron mechanism):**
+- `Label`, `ProgramArguments` (`[<self_exe>, "run"]`), `StartCalendarInterval` (Hour+Minute), `StandardOutPath` (`/tmp/advisory-cron-<label>.stdout.log`), `StandardErrorPath`, `WorkingDirectory`, `RunAtLoad` (`<false/>`)
+
+**Cron expression support:**
+- Simple `M H * * *` daily form only (Phase 1 launchd constraint). Complex expressions → exit 2 with helpful error. Config-driven `hour`/`minute` calendar form has no such restriction.
+
+**`#[allow(dead_code)]` removal:**
+- `src/config.rs:72` `#[allow(dead_code)]` on `pub fn load` removed — first binary callsite wired in `register::run`. (Heads-up #1 resolution.)
+
+**INVARIANTS.md updated:**
+- Appended INV-10 through INV-13 covering: `launchctl` shell-out boundary, `id -u` shell-out boundary, `~/Library/LaunchAgents/` write boundary, label sanitization defense.
+
+**Tests added:**
+- 11 unit tests in `src/launchd.rs` (plist gen, cron parsing, label sanitization, NoopLaunchctl recording, xml escape, current_uid sanity)
+- 6 integration tests in `tests/cli_register.rs` (plist write, cron simple form, complex cron exit 2, missing config exit 2, idempotent unregister, round-trip register→unregister)
+- Total: 33 tests (20 unit + 3 cli_help regression + 4 cli_init regression + 6 cli_register)
+
+**Docs updated (Tầng 1):**
+- `docs/ARCHITECTURE.md` — §Modules table marks `src/launchd.rs`/`register.rs`/`unregister.rs` 1.3 ✅; §CLI surface table adds `--config`/`--schedule` optional notes; §Cron mechanism adds M H * * * constraint + idempotency note + UID resolution note; §Phase status updated to 1.3 shipped
+- `docs/security/INVARIANTS.md` — INV-10..INV-13 appended
+
+**Acceptance (all ✅):**
+- `cargo build --release` — zero warnings
+- `cargo test --all` — 33/33 pass
+- `cargo clippy --all-targets -- -D warnings` — clean
+- `cargo fmt --check` — no diff
+- `git diff src/cli/mod.rs` — empty (V2 [O1.1] constraint satisfied)
+
+---
+
 ## 2026-05-27 — P002: Phase 1.2 — Config schema (TOML + serde) + wire `init` handler
 
 **Phiếu:** P002 (Tầng 1 — introduces config schema, touched by every subsequent subcommand)
