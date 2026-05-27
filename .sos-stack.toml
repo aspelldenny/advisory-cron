@@ -1,0 +1,14 @@
+# .sos-stack.toml — advisory-cron stack manifest
+# Consumed by advisory-watch (trinh sát) + boundary-check (giám sát) subagents.
+
+schema_version = 1
+detected_at = "2026-05-27T03:30:00Z"
+sos_kit_version = "P042"
+
+# Rust single-stack
+[[stack]]
+type = "rust"
+manifest = "Cargo.toml"
+lock_file = "Cargo.lock"
+lock_format = "cargo-lock"
+parser = ""  # stub — cargo-lock parser deferred per advisory-watch handbook P041 status

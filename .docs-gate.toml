@@ -1,0 +1,31 @@
+# docs-gate config for advisory-cron
+# Schema: flat-string v0.1.0
+
+docs_dir = "docs"
+
+# Changelog at docs/CHANGELOG.md — path is relative to docs_dir, so just "CHANGELOG.md".
+changelog = "CHANGELOG.md"
+changelog_max_age_days = 1
+changelog_staged = true
+
+# Extension hooks empty until we know we need them.
+rules = []
+staleness = []
+doc_structure = []
+count_check = []
+cross_doc = []
+
+[architecture]
+# Disabled at bootstrap — Phase 1 lands modules + CLI + cron + error sections inline.
+# Re-enable once first Phase 1 phiếu ships (worker fills ARCHITECTURE.md to match
+# docs-gate's expected 9-section shape, or we tune required_sections below).
+enabled = false
+file = "docs/ARCHITECTURE.md"
+required_sections = 0
+required_non_empty = []
+
+[ticket]
+ticket_dir = "ticket"
+type_pattern = "Loại:"
+valid_types = ["Feature", "Bugfix", "Hotfix", "chore", "docs", "infra"]
+exclude_files = ["TICKET_TEMPLATE.md"]
