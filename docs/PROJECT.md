@@ -6,7 +6,7 @@
 
 ## Vision (one paragraph)
 
-`advisory-cron` is a local cron wrapper that fires periodic Claude Code tasks — chiefly `/advisory-scan`, but generalizable to any slash command, shell command, or Claude Code agent invocation — via macOS launchd (Phase 1) or Linux cron/systemd (Phase 2+). It produces a heartbeat JSONL log and sends a Telegram alert when a fire fails or skips. The tool exists because **shipping a check ≠ the check running** (Sub-mechanism A — trigger gap). GitHub Actions cron can pause due to quota, and Claude Code is not always open in a session. A local launchd plist fires regardless of editor state.
+`advisory-cron` is a local cron wrapper that fires periodic Claude Code tasks — chiefly `/advisory-scan`, but generalizable to any slash command, shell command, or Claude Code agent invocation — via macOS launchd (Phase 1) or Linux cron/systemd (Phase 2+). It produces a heartbeat JSONL log and sends a Telegram alert when a fire fails or skips. The tool exists because **shipping a check ≠ the check running** (Sub-mechanism A — trigger gap). GitHub Actions cron can pause due to quota, and Claude Code is not always open in a session. A local launchd plist fires regardless of editor state. The same binary is exposed **both as a CLI tool and as an MCP server** (stdio subcommand `advisory-cron mcp`) so Claude Desktop / Claude Code can drive it directly from a chat session — register, fire, inspect status — without dropping to a terminal.
 
 ## Why this exists (the trigger gap)
 
@@ -34,8 +34,9 @@ A single `advisory-cron` binary that:
 3. **Logs heartbeats** to `~/.local/state/advisory-cron/heartbeat.jsonl` (or platform-appropriate XDG path).
 4. **Reads its own config** from `~/.config/advisory-cron/config.toml` (or repo-local override).
 5. **Reports status** — `advisory-cron status` shows next fire time + last run result.
+6. **Exposes all 5 subcommands as MCP tools** — `advisory-cron mcp` runs an MCP server over stdio (JSON-RPC 2.0). Full parity: each CLI subcommand (`init`, `register`, `unregister`, `run`, `status`) has a 1-1 MCP tool, so Claude Desktop / Claude Code can invoke any operation from chat.
 
-Out of scope for Phase 1: Telegram alert, retry policy, Linux support, sos-kit packaging.
+Out of scope for Phase 1: Telegram alert, retry policy, Linux support, sos-kit packaging, HTTP/SSE MCP transport (stdio only).
 
 ## Non-goals (Sếp pre-empts AI bias)
 
@@ -54,10 +55,13 @@ Out of scope for Phase 1: Telegram alert, retry policy, Linux support, sos-kit p
 - [ ] `advisory-cron run` fires the configured task once, captures stdout/stderr, writes heartbeat.
 - [ ] `advisory-cron status` shows next fire time from `launchctl print` + reads last heartbeat.
 - [ ] `advisory-cron unregister` removes the plist cleanly.
-- [ ] `cargo build --release` produces single binary < 5MB.
-- [ ] `cargo test --all` all pass.
-- [ ] README.md install + quick start verified by Sếp dogfood.
+- [ ] `advisory-cron mcp` starts MCP server over stdio (JSON-RPC 2.0); `initialize` handshake returns server info + 5 tools.
+- [ ] MCP tools `init` / `register` / `unregister` / `run` / `status` callable from Claude Desktop with config snippet documented in README.
+- [ ] `cargo build --release` produces single binary < 7MB (raised from 5MB to budget MCP SDK).
+- [ ] `cargo test --all` all pass (includes MCP handshake integration test).
+- [ ] README.md install + quick start verified by Sếp dogfood for BOTH CLI and MCP path (Claude Desktop calls `register` via MCP, then sees it in `launchctl list`).
 - [ ] Heartbeat JSONL schema documented in ARCHITECTURE.md.
+- [ ] MCP tool schema (input/output JSON for each of 5 tools) documented in ARCHITECTURE.md.
 
 ## Phase 2+ (deferred — not committed yet)
 

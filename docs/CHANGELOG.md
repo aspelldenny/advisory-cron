@@ -6,6 +6,29 @@
 
 ---
 
+## 2026-05-27 — Phase 1 scope expansion: CLI + MCP dual surface
+
+**Trigger:** Sếp re-defined Phase 1 ship-gate. "Tool rust phải gói thành MCP và CLI mới là hoàn thành." → CLI-only Phase 1 insufficient; MCP server (stdio) must ship in same wave.
+
+**Decisions captured:**
+- MCP tool set = full parity với CLI (5 tools: `init` / `register` / `unregister` / `run` / `status`)
+- Transport = stdio subcommand `advisory-cron mcp` (single binary, no daemon, matches hard line #1)
+- Sprint shape = thêm Phase 1.7 (MCP wrapper) sau 1.5, đẩy 1.6 (docs) xuống cuối
+
+**Doc updates (Tầng 1 — touches acceptance criteria + sprint + module layout):**
+- `docs/PROJECT.md` — Vision para extended; MVP scope item 6 added (MCP server, 5 tools); acceptance criteria +3 bullets (MCP handshake, Claude Desktop integration test, MCP schema doc); binary size budget raised 5MB → 7MB
+- `docs/BACKLOG.md` — Active sprint title + goal expanded; Phase 1.7 added (~300 LOC, Tầng 1); Phase 1.6 moved to end, scope raised 60 → 90min
+- `docs/ARCHITECTURE.md` — Modules table +4 entries (`cli/mcp.rs`, `core/mod.rs`, `mcp/server.rs`, `mcp/tools.rs`); layering invariant added (`core::*` is CLI/MCP-agnostic); CLI surface +`mcp` subcommand; new "MCP surface" section with tool registry + Claude Desktop config sketch + behavioral invariant; exit code 5 (MCP transport error)
+
+**Known TBD for Architect (P00x — Phase 1.7):**
+- Rust MCP SDK choice (likely `rmcp` official Anthropic crate — verify via `context7` before spec)
+- Whether to introduce `schemars` for auto-derived JSON tool schemas (size budget consideration)
+- Exact integration test shape ("MCP register ≡ CLI register" diff against shared temp LaunchAgents dir)
+
+**Not yet started:** no phiếu opened. Next: P001 = Phase 1.1 (CLI scaffold).
+
+---
+
 ## 2026-05-27 — Bootstrap (seed)
 
 **Repo initialized.** `cargo new` Phase 0 scaffold + sos-kit doctrine seed by orchestrator (running from tarot main session 2026-05-27).

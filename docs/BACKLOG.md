@@ -8,11 +8,12 @@
 
 ---
 
-## 🔥 Active sprint: Phase 1 — MVP launchd plist fire + heartbeat
+## 🔥 Active sprint: Phase 1 — MVP launchd plist fire + heartbeat + MCP wrapper
 
-> **Mục tiêu:** Ship single binary `advisory-cron` chạy được trên macOS — register/unregister launchd plist, fire task on-demand, log heartbeat JSONL, show status. Sếp dogfood end-to-end với `/advisory-scan` daily 09:00 ICT.
-> **Kết thúc khi:** Acceptance criteria Phase 1 (PROJECT.md) tick xanh hết + Sếp confirm "đã quan sát launchd fire đúng lịch 3 ngày liên tiếp".
+> **Mục tiêu:** Ship single binary `advisory-cron` chạy được trên macOS — register/unregister launchd plist, fire task on-demand, log heartbeat JSONL, show status, AND expose tất cả qua MCP server (stdio). Sếp dogfood end-to-end với `/advisory-scan` daily 09:00 ICT + Claude Desktop gọi được mọi tool qua MCP.
+> **Kết thúc khi:** Acceptance criteria Phase 1 (PROJECT.md) tick xanh hết + Sếp confirm "đã quan sát launchd fire đúng lịch 3 ngày liên tiếp" + "đã gọi advisory-cron MCP tool từ Claude Desktop".
 > **Started:** 2026-05-27
+> **Scope expanded:** 2026-05-27 — Sếp re-defined ship-gate = CLI + MCP cùng ship. Phase 1.7 added.
 
 - [ ] **[NEW]** **Phase 1.1 — Scaffold + CLI surface (clap derive).** Subcommands: `init`, `register`, `unregister`, `run`, `status`. Each subcommand returns proper exit code + help text. Empty implementations (panic with "not yet implemented") + happy-path test for `--help`. Tầng 1 (defines CLI contract for entire tool). ~150 LOC.
 
@@ -24,7 +25,9 @@
 
 - [ ] **[NEW]** **Phase 1.5 — Status reporter.** `status` subcommand: parse `launchctl print gui/$UID/<label>` for next fire time, read last N lines of `heartbeat.jsonl`, render to stdout (table or simple text). Handle "plist not loaded" + "no heartbeats yet" cases cleanly. Tầng 2 (no schema change, just rendering). ~100 LOC.
 
-- [ ] **[NEW]** **Phase 1.6 — README + ARCHITECTURE.md.** Update README quick-start with verified commands. Fill in ARCHITECTURE.md "Modules" section with per-module purpose + "Cron mechanism" section explaining launchd plist lifecycle. Tầng 2 (docs only). ~60 min.
+- [ ] **[NEW]** **Phase 1.7 — MCP server wrapper (stdio).** Subcommand `advisory-cron mcp` starts JSON-RPC 2.0 server over stdin/stdout. Exposes 5 tools 1-1 with CLI subcommands (`init`, `register`, `unregister`, `run`, `status`). Each tool's handler calls the SAME core function as its CLI counterpart (zero logic duplication — CLI layer + MCP layer both thin shells over `core::*` functions). MCP tool input schemas derived from clap args (or hand-written JSON schemas if `schemars` not pulled in). Includes README snippet for Claude Desktop `claude_desktop_config.json` registration. Architect MUST research Rust MCP SDK choice (likely `rmcp` official Anthropic crate — verify via context7 before specing). Tầng 1 (adds new dep + new public surface + may force refactor of phiếu 1.2-1.5 handlers to expose `core::*` instead of inline subcommand logic). ~300 LOC + handshake integration test.
+
+- [ ] **[NEW]** **Phase 1.6 — README + ARCHITECTURE.md.** Update README quick-start with verified commands for BOTH CLI and MCP paths. Fill in ARCHITECTURE.md "Modules" section with per-module purpose + "Cron mechanism" section explaining launchd plist lifecycle + "MCP surface" section with tool schemas + Claude Desktop config example. Tầng 2 (docs only). ~90 min (raised from 60 to budget MCP coverage). **Runs AFTER 1.7** so docs reflect final shipped surface.
 
 ---
 

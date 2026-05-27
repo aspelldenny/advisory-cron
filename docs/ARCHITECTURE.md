@@ -38,12 +38,18 @@ Planned module layout for Phase 1. Worker may adjust per phiếu's spec (Archite
 | `src/cli/unregister.rs` | `advisory-cron unregister` — `launchctl bootout` + remove plist. | 1.3 |
 | `src/cli/run.rs` | `advisory-cron run` — fire task once, write heartbeat. | 1.4 |
 | `src/cli/status.rs` | `advisory-cron status` — read launchd next-fire + last heartbeat. | 1.5 |
+| `src/cli/mcp.rs` | `advisory-cron mcp` — start MCP server over stdio (thin shell over `core::*`). | 1.7 |
+| `src/core/mod.rs` | Pure functions called by BOTH CLI handlers and MCP tool handlers. Zero CLI/MCP coupling. Introduced 1.7 (may require touch-up to 1.2-1.5 handlers to extract their core logic). | 1.7 |
+| `src/mcp/server.rs` | MCP server bootstrap (handshake, transport, tool registry). SDK choice TBD by Architect (likely `rmcp`). | 1.7 |
+| `src/mcp/tools.rs` | 5 MCP tool definitions (input schema + handler → `core::*`). | 1.7 |
 | `src/config.rs` | TOML config schema (serde-derive). Validation on load. | 1.2 |
 | `src/launchd.rs` | Plist XML generation + `launchctl` shell invocation wrappers. macOS-only. | 1.3 |
 | `src/runner.rs` | `tokio::process::Command` task spawn + capture stdout/stderr/exit. | 1.4 |
 | `src/heartbeat.rs` | JSONL append + read-last-N. | 1.4 |
 
 *(Phase 2 adds `src/alert.rs` for Telegram + `src/retry.rs` for retry policy.)*
+
+**Layering invariant (introduced Phase 1.7):** `core::*` knows nothing about CLI or MCP. `cli::*` and `mcp::*` are both thin adapters. A single code path = single behavior — `register` from CLI and `register` from MCP MUST produce identical plist + identical side effects.
 
 ---
 
@@ -56,6 +62,7 @@ Planned module layout for Phase 1. Worker may adjust per phiếu's spec (Archite
 | `unregister` | `--label <name>` | Remove + unload plist | 1.3 |
 | `run` | (no args) | Fire configured task once | 1.4 |
 | `status` | `--json` (machine output) | Show next fire + last heartbeat | 1.5 |
+| `mcp` | (no args — stdio only) | Start MCP server on stdin/stdout; serves 5 tools mirroring above | 1.7 |
 
 Exit codes:
 
@@ -66,6 +73,7 @@ Exit codes:
 | 2 | Config not found / invalid |
 | 3 | launchd operation failed |
 | 4 | Task fire failed (subcommand `run` only) |
+| 5 | MCP transport error (subcommand `mcp` only — stdio closed, malformed JSON-RPC) |
 | 130 | SIGINT (Ctrl+C) |
 
 ---
@@ -117,6 +125,41 @@ Then `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.advisorycron.<labe
 - `status` `launchctl print gui/$UID/<label>` parses output for next fire time
 
 **Why launchd and not cron?** Sếp uses macOS. launchd is the native scheduler — handles sleep/wake, integrates with GUI session, doesn't need crontab editing. Linux support via systemd timer or cron deferred to Phase 3.
+
+---
+
+## MCP surface (Phase 1.7 — stdio)
+
+`advisory-cron mcp` launches an MCP (Model Context Protocol) JSON-RPC 2.0 server over stdin/stdout. Designed for Claude Desktop / Claude Code MCP client integration — NOT a long-running network daemon (matches hard line #1: client owns process lifetime).
+
+**Transport:** stdio only in Phase 1. HTTP/SSE deferred (not needed for solo macOS).
+
+**Tool registry:** 5 tools, 1-1 with CLI subcommands. Each tool's handler delegates to `core::*` (same code path as CLI). Tool schemas (input/output JSON) populated by Architect during Phase 1.7 spec.
+
+| MCP tool | Mirrors CLI | Input schema (TBD by Architect) |
+|----------|-------------|---------------------------------|
+| `init` | `advisory-cron init` | `{ force?: bool }` |
+| `register` | `advisory-cron register` | `{ schedule: string, label: string }` |
+| `unregister` | `advisory-cron unregister` | `{ label: string }` |
+| `run` | `advisory-cron run` | `{}` |
+| `status` | `advisory-cron status` | `{}` → returns next fire + last heartbeat JSON |
+
+**Claude Desktop registration (sketch — Architect verifies exact JSON in P00x):**
+
+```json
+{
+  "mcpServers": {
+    "advisory-cron": {
+      "command": "/Users/<user>/.cargo/bin/advisory-cron",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+**SDK choice:** TBD by Architect. Likely candidates: `rmcp` (official Anthropic Rust MCP SDK) or hand-rolled JSON-RPC if dep tree too heavy. Architect MUST verify via `context7` before spec.
+
+**Behavioral invariant:** `register` via MCP MUST produce identical plist + identical `launchctl` state as `register` via CLI. Tested by integration test that exercises both paths against the same temp `LaunchAgents` dir and diffs results.
 
 ---
 
