@@ -76,6 +76,7 @@ mod tests {
             heartbeat: HeartbeatConfig {
                 log_path: PathBuf::from("/tmp/unused.jsonl"),
             },
+            alert: None,
         }
     }
 

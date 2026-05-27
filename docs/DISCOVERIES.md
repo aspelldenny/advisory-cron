@@ -6,6 +6,10 @@
 
 ---
 
+## P008 — Telegram alert on task failure shipped 2026-05-27
+
+- 2026-05-27 P008: Telegram alert Phase 2.1 shipped (src/alert.rs env-free; AlertConfig + TelegramConfig config schema; core::run wired with env-var-at-call-site seam; INV-19; wiremock dev-dep; 116 tests total +22 new; binary 3.9MB; Constraint #1 + #11 satisfied) → see docs/discoveries/P008.md
+
 ## P007 — README + ARCHITECTURE post-ship docs polish 2026-05-27
 
 - 2026-05-27 P007: README + ARCHITECTURE post-ship polish (6-step CLI quick-start; Sub-mechanism A verify step added; MCP smoke verified exit 0; "What advisory-cron fires" section; 0 schema drift; 22 modules confirmed; Phase 1 Code COMPLETE status) → see docs/discoveries/P007.md

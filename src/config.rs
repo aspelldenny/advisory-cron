@@ -32,6 +32,11 @@ pub struct Config {
     pub task: TaskConfig,
     pub schedule: ScheduleConfig,
     pub heartbeat: HeartbeatConfig,
+    /// Optional alert config. Absent in Phase 1 configs — deserializes as `None`
+    /// via `#[serde(default)]`. Alert is opt-in: `advisory-cron init` does not
+    /// write this block. Sếp manually adds `[alert.telegram]` to enable.
+    #[serde(default)]
+    pub alert: Option<AlertConfig>,
 }
 
 /// `[task]` block — what to run.
@@ -68,6 +73,21 @@ pub struct HeartbeatConfig {
     pub log_path: PathBuf,
 }
 
+/// `[alert]` block. Optional — alert is opt-in.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AlertConfig {
+    pub telegram: Option<TelegramConfig>,
+}
+
+/// `[alert.telegram]` block. Either `bot_token` (inline) OR `bot_token_file`
+/// (path to KEY=VAL file with TG_BOT_TOKEN=...). Validated at load time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TelegramConfig {
+    pub chat_id: String,
+    pub bot_token: Option<String>,
+    pub bot_token_file: Option<PathBuf>,
+}
+
 impl Config {
     /// Load and validate config from a TOML file.
     ///
@@ -97,6 +117,26 @@ impl Config {
                 bail!("config.schedule.minute must be 0..=59 (got {minute})");
             }
         }
+        // Alert config validation (Phase 2.1).
+        if let Some(alert) = &self.alert
+            && let Some(tg) = &alert.telegram
+        {
+            if tg.chat_id.trim().is_empty() {
+                bail!("[alert.telegram].chat_id is empty");
+            }
+            match (&tg.bot_token, &tg.bot_token_file) {
+                (Some(_), Some(_)) => bail!(
+                    "[alert.telegram]: specify either `bot_token` or `bot_token_file`, not both"
+                ),
+                (None, None) => {
+                    bail!("[alert.telegram]: missing both `bot_token` and `bot_token_file`")
+                }
+                (Some(t), None) if t.trim().is_empty() => {
+                    bail!("[alert.telegram].bot_token is empty")
+                }
+                _ => {}
+            }
+        }
         Ok(())
     }
 
@@ -114,6 +154,9 @@ impl Config {
             heartbeat: HeartbeatConfig {
                 log_path: home.join(".local/state/advisory-cron/heartbeat.jsonl"),
             },
+            // Alert is opt-in. `advisory-cron init` does NOT write [alert] block.
+            // Sếp adds it manually after creating the bot token.
+            alert: None,
         }
     }
 
@@ -257,6 +300,7 @@ mod tests {
             heartbeat: HeartbeatConfig {
                 log_path: PathBuf::from("/tmp/hb.jsonl"),
             },
+            alert: None,
         };
         let err = cfg.validate().unwrap_err();
         assert!(format!("{err:#}").contains("hour"));
@@ -278,6 +322,7 @@ mod tests {
             heartbeat: HeartbeatConfig {
                 log_path: PathBuf::from("/tmp/hb.jsonl"),
             },
+            alert: None,
         };
         let err = cfg.validate().unwrap_err();
         assert!(format!("{err:#}").contains("minute"));
@@ -380,5 +425,129 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cfg = Config::default_for_home(dir.path());
         assert_eq!(cfg.task.label, Some("advisory-cron".to_string()));
+    }
+
+    // ---------------------------------------------------------------------------
+    // P008 — alert config (backwards compat + validation)
+    // ---------------------------------------------------------------------------
+
+    fn base_toml() -> &'static str {
+        r#"
+        [task]
+        command = "claude"
+        args = []
+        working_dir = "/tmp"
+
+        [schedule]
+        hour = 9
+        minute = 0
+
+        [heartbeat]
+        log_path = "/tmp/hb.jsonl"
+        "#
+    }
+
+    #[test]
+    fn load_without_alert_block_gives_none() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, base_toml()).unwrap();
+        let cfg = Config::load(&path).unwrap();
+        assert!(
+            cfg.alert.is_none(),
+            "old config without [alert] block must deserialize alert as None"
+        );
+    }
+
+    #[test]
+    fn load_with_alert_inline_token() {
+        let raw = format!(
+            r#"{}
+[alert.telegram]
+chat_id = "12345"
+bot_token = "my-bot-token"
+"#,
+            base_toml()
+        );
+        let cfg: Config = toml::from_str(&raw).unwrap();
+        cfg.validate().unwrap();
+        let tg = cfg
+            .alert
+            .unwrap()
+            .telegram
+            .expect("telegram block must be Some");
+        assert_eq!(tg.chat_id, "12345");
+        assert_eq!(tg.bot_token.as_deref(), Some("my-bot-token"));
+        assert!(tg.bot_token_file.is_none());
+    }
+
+    #[test]
+    fn load_with_alert_file_token() {
+        let raw = format!(
+            r#"{}
+[alert.telegram]
+chat_id = "99999"
+bot_token_file = "/tmp/secrets.env"
+"#,
+            base_toml()
+        );
+        let cfg: Config = toml::from_str(&raw).unwrap();
+        cfg.validate().unwrap();
+        let tg = cfg
+            .alert
+            .unwrap()
+            .telegram
+            .expect("telegram block must be Some");
+        assert_eq!(tg.chat_id, "99999");
+        assert!(tg.bot_token.is_none());
+        assert!(tg.bot_token_file.is_some());
+    }
+
+    #[test]
+    fn validate_alert_both_set_returns_err() {
+        let raw = format!(
+            r#"{}
+[alert.telegram]
+chat_id = "123"
+bot_token = "tok"
+bot_token_file = "/tmp/secrets.env"
+"#,
+            base_toml()
+        );
+        let cfg: Config = toml::from_str(&raw).unwrap();
+        let err = cfg.validate().unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("not both"), "got: {msg}");
+    }
+
+    #[test]
+    fn validate_alert_neither_set_returns_err() {
+        let raw = format!(
+            r#"{}
+[alert.telegram]
+chat_id = "123"
+"#,
+            base_toml()
+        );
+        let cfg: Config = toml::from_str(&raw).unwrap();
+        let err = cfg.validate().unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("missing both"), "got: {msg}");
+    }
+
+    #[test]
+    fn validate_alert_empty_chat_id_returns_err() {
+        let raw = format!(
+            r#"{}
+[alert.telegram]
+chat_id = "   "
+bot_token = "tok"
+"#,
+            base_toml()
+        );
+        let cfg: Config = toml::from_str(&raw).unwrap();
+        let err = cfg.validate().unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("chat_id"), "got: {msg}");
     }
 }
