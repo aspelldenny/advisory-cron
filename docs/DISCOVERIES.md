@@ -6,6 +6,10 @@
 
 ---
 
+## P006 — MCP server wrapper + core/* extraction shipped 2026-05-27
+
+- 2026-05-27 P006: MCP server wrapper (rmcp 1.7.0 stdio; 5 tools; INV-18; core/* extraction for dual-surface parity; 94 tests; 2.1MB binary; ServerInfo/Implementation non-exhaustive structs require constructors; no lib.rs means integration tests are subprocess-only) → see docs/discoveries/P006.md
+
 ## P005 — status reporter shipped 2026-05-27
 
 - 2026-05-27 P005: Status reporter shipped (status --label/--config/--json/--last; LaunchctlClient trait + print method; macOS 15 launchctl exposes NO next-fire timestamp — parse_next_fire pivoted to descriptor Hour/Minute → "daily at HH:MM"; INV-17 launchctl print shell-out boundary; 70 tests total, +19 new) → see docs/discoveries/P005.md
