@@ -32,12 +32,13 @@ Planned module layout for Phase 1. Worker may adjust per phiếu's spec (Archite
 
 | Module | Purpose | Phase ships |
 |--------|---------|-------------|
-| `src/main.rs` | clap-derive CLI entry point. Parses subcommand + dispatches to `cli::*` handlers. | 1.1 |
-| `src/cli/init.rs` | `advisory-cron init` — write default config to `~/.config/advisory-cron/config.toml`. | 1.2 |
-| `src/cli/register.rs` | `advisory-cron register` — generate plist + `launchctl bootstrap`. | 1.3 |
-| `src/cli/unregister.rs` | `advisory-cron unregister` — `launchctl bootout` + remove plist. | 1.3 |
-| `src/cli/run.rs` | `advisory-cron run` — fire task once, write heartbeat. | 1.4 |
-| `src/cli/status.rs` | `advisory-cron status` — read launchd next-fire + last heartbeat. | 1.5 |
+| `src/main.rs` | clap-derive CLI entry point. Parses subcommand + dispatches to `cli::*` handlers. | 1.1 ✅ |
+| `src/cli/mod.rs` | Commands enum + dispatch fn routing to per-subcommand handlers. | 1.1 ✅ |
+| `src/cli/init.rs` | `advisory-cron init` — write default config to `~/.config/advisory-cron/config.toml`. Skeleton shipped 1.1; impl deferred to 1.2. | 1.1 skeleton ✅ → impl 1.2 |
+| `src/cli/register.rs` | `advisory-cron register` — generate plist + `launchctl bootstrap`. Skeleton shipped 1.1; impl deferred to 1.3. | 1.1 skeleton ✅ → impl 1.3 |
+| `src/cli/unregister.rs` | `advisory-cron unregister` — `launchctl bootout` + remove plist. Skeleton shipped 1.1; impl deferred to 1.3. | 1.1 skeleton ✅ → impl 1.3 |
+| `src/cli/run.rs` | `advisory-cron run` — fire task once, write heartbeat. Skeleton shipped 1.1; impl deferred to 1.4. | 1.1 skeleton ✅ → impl 1.4 |
+| `src/cli/status.rs` | `advisory-cron status` — read launchd next-fire + last heartbeat. Skeleton shipped 1.1; impl deferred to 1.5. | 1.1 skeleton ✅ → impl 1.5 |
 | `src/cli/mcp.rs` | `advisory-cron mcp` — start MCP server over stdio (thin shell over `core::*`). | 1.7 |
 | `src/core/mod.rs` | Pure functions called by BOTH CLI handlers and MCP tool handlers. Zero CLI/MCP coupling. Introduced 1.7 (may require touch-up to 1.2-1.5 handlers to extract their core logic). | 1.7 |
 | `src/mcp/server.rs` | MCP server bootstrap (handshake, transport, tool registry). SDK choice TBD by Architect (likely `rmcp`). | 1.7 |
@@ -208,7 +209,7 @@ Error categories (anyhow context chain):
 
 ## Phase status
 
-- 🚧 **Phase 1** — Bootstrap. Module structure planned (above), no code shipped yet.
+- 🚧 **Phase 1** — In progress. Phase 1.1 shipped: CLI scaffold (5 subcommand stubs, clap derive). Phases 1.2–1.7 pending.
 - ⏸️ **Phase 2** — Deferred. Trigger: Phase 1 dogfood xanh 3 ngày.
 - ⏸️ **Phase 3** — Deferred. Trigger: Phase 2 ship + need Linux support.
 
