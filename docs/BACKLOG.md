@@ -44,6 +44,8 @@
 
 - **[DEBT] cron PATH inheritance** (Phase 3.5+ Tầng 2 or 4) — from dogfood probe 2026-05-28. Cron user environment có minimal PATH (`/usr/bin:/bin`) — nvm/cargo/local paths KHÔNG inherit. User config `command = "claude"` (bare binary) fails at fire time với exit 127 unless command = absolute path. Sếp workaround 2026-05-28: edit `~/.config/advisory-cron/config.toml` thành `command = "/home/sep/.nvm/versions/node/v24.15.0/bin/claude"`. **Side effect:** absolute path locks node version, nvm upgrade breaks. Fix candidates: (a) add `[task.env]` config block với `PATH` override field (advisory-cron prepends to cron-fired child env), (b) document caveat in README §Linux quick-start (cheaper, no code), (c) `cron-friendly-PATH` auto-injection if `command` is bare-name + `which` resolves to non-cron-PATH location. Promote to phiếu when ≥1 user trips on this.
 
+- **[DEBT] `working_dir` default UX gap (project-local skills)** (Phase 3.5+ Tầng 2 docs) — from dogfood test fire 2026-05-28. Default config `working_dir = "/home/sep"` (user home) — when running project-local Claude slash command như `/advisory-scan` (lives ở `.claude/skills/advisory-scan` của project repo), spawned `claude -p /advisory-scan` returned `"Unknown command: /advisory-scan"` (exit 0 silent no-op) vì claude CLI launched từ home dir không tìm thấy project skill. Workaround: edit config `working_dir = "/home/sep/advisory-cron"`. Fix: README §Linux quick-start nên explicit note "working_dir must be project root if using project-local skills/slash-commands". ~5 LOC docs. Note: claude CLI returning exit 0 cho "Unknown command" violates fail-loud spirit (PROJECT.md hard line #5) but upstream Claude CLI behavior, không actionable advisory-cron-side.
+
 ---
 
 ## 🅿️ Park / nghĩ thêm
