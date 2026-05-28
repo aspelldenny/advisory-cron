@@ -61,6 +61,8 @@
 
 - **[DEBT] `fire_task` no process timeout** (from PR#4 security review advisory note 2026-05-27). `runner::fire_task` uses `Command::new(...).output().await` without `tokio::time::timeout` wrapper — a hung child process (e.g. `claude -p` waiting on input) blocks the launchd job indefinitely. INV-14 in INVARIANTS.md already notes Phase 2+ deferral. Promote to phiếu only if dogfood reveals real hung-run incidents. Tầng 1 when picked up (adds config field `[task].timeout_secs` + tokio::time::timeout wiring).
 
+- **[DEBT] core layer `is_valid_label` consolidation** (Phase 3.5+ Tầng 2) — from P014 V2 Worker CHALLENGE Turn 1 discovery (PR#14, 2026-05-28). `src/core/{register,unregister,status}.rs` each carry inline `is_valid_label` copy predating P013's scheduler-layer consolidation. 4 implementations kept consistent today (1 shared `scheduler/mod.rs::is_valid_label` + 3 inline core copies) but a Worker changing allowlist chars in only one location would silently desync 4 callsites. Refactor candidates: (a) import `scheduler::is_valid_label` from core layer, OR (b) extract to new `validation::label` module. INV-22 sub-rule 2 (INVARIANTS.md) explicitly documents 4-location reality + Phase 3.5+ deferral. Promote to phiếu when Phase 3.5 sprint opens.
+
 ---
 
 ## 🅿️ Park / nghĩ thêm
