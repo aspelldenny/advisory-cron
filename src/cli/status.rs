@@ -6,7 +6,7 @@
 //! `StatusReport` and parsing helpers live in `src/core/status.rs`.
 
 use crate::core::status::{StatusArgs, StatusReport, run as core_run};
-use crate::launchd::RealLaunchctl;
+use crate::scheduler::PlatformScheduler;
 use anyhow::Result;
 use std::path::PathBuf;
 
@@ -35,14 +35,14 @@ pub struct Args {
 /// - 1: invalid label.
 /// - 2: config not found / invalid.
 pub async fn run(args: Args) -> Result<u8> {
-    let client = RealLaunchctl;
+    let scheduler = PlatformScheduler;
     match core_run(
         StatusArgs {
             label: args.label,
             config_path: args.config,
             last: args.last,
         },
-        &client,
+        &scheduler,
     ) {
         Ok(report) => {
             if args.json {

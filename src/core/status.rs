@@ -1,14 +1,17 @@
-//! Core status logic — query launchd state + read heartbeats.
+//! Core status logic — query scheduler state + read heartbeats.
 //!
 //! Pure business logic, no CLI or MCP concerns. Both `cli::status` and `mcp::tools`
 //! call this. Satisfies ARCHITECTURE.md §Layering invariant.
 //!
 //! `StatusReport` is pub (moved here from `src/cli/status.rs` per P006 Decision 2).
+//!
+//! Phase 3.1 (P012): generic `<L: LaunchctlClient>` → `<S: Scheduler>`.
+//! `StatusReport.plist_loaded` field name preserved (JSON schema stability — anchor #17).
 
 use crate::config::Config;
 use crate::core::config_path::default_config_path;
 use crate::heartbeat::{self, HeartbeatRecord};
-use crate::launchd::{LaunchctlClient, LaunchctlPrintOutput};
+use crate::scheduler::{Scheduler, SchedulerStatus};
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
@@ -25,6 +28,8 @@ pub struct StatusArgs {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StatusReport {
     pub label: String,
+    /// Field name preserved for JSON schema stability (anchor #17 — tests/cli_status.rs:146).
+    /// Semantically maps to `SchedulerStatus.is_registered`.
     pub plist_loaded: bool,
     pub next_fire: Option<String>,
     pub heartbeat_log_path: String,
@@ -33,8 +38,10 @@ pub struct StatusReport {
 
 /// V2 (per Architect Turn 1 RESPOND, internal-resolution pattern):
 /// - Resolves config path internally via `default_config_path()` if Args.config_path is None.
-/// - `&client: &L: LaunchctlClient` injected (needed for launchctl print).
-pub fn run<L: LaunchctlClient>(args: StatusArgs, client: &L) -> Result<StatusReport> {
+/// - `&scheduler: &S: Scheduler` injected (needed for scheduler status query).
+///
+/// Phase 3.1: delegates to `scheduler.status()` instead of `client.print()`.
+pub fn run<S: Scheduler>(args: StatusArgs, scheduler: &S) -> Result<StatusReport> {
     // 1. Resolve config path.
     let config_path = match args.config_path {
         Some(p) => p,
@@ -59,20 +66,20 @@ pub fn run<L: LaunchctlClient>(args: StatusArgs, client: &L) -> Result<StatusRep
         );
     }
 
-    // 5. Query launchctl.
-    let print_result = match client.print(&label) {
-        Ok(o) => o,
-        Err(_err) => LaunchctlPrintOutput {
-            raw_stdout: String::new(),
-            not_loaded: true,
+    // 5. Query scheduler.
+    let status = match scheduler.status(&label) {
+        Ok(s) => s,
+        Err(_err) => SchedulerStatus {
+            is_registered: false,
+            raw_descriptor: None,
         },
     };
 
-    // 6. Parse next-fire schedule.
-    let next_fire = if print_result.not_loaded {
-        None
+    // 6. Parse next-fire schedule (macOS descriptor format).
+    let next_fire = if status.is_registered {
+        status.raw_descriptor.as_deref().and_then(parse_next_fire)
     } else {
-        parse_next_fire(&print_result.raw_stdout)
+        None
     };
 
     // 7. Read recent heartbeats.
@@ -81,7 +88,7 @@ pub fn run<L: LaunchctlClient>(args: StatusArgs, client: &L) -> Result<StatusRep
 
     Ok(StatusReport {
         label,
-        plist_loaded: !print_result.not_loaded,
+        plist_loaded: status.is_registered, // field name preserved — JSON schema stability
         next_fire,
         heartbeat_log_path: config.heartbeat.log_path.display().to_string(),
         last_runs,

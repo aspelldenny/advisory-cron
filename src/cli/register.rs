@@ -4,7 +4,7 @@
 //! This module handles Args parsing + stdout/stderr + exit code mapping only.
 
 use crate::core::register::{RegisterArgs, run as core_run};
-use crate::launchd::RealLaunchctl;
+use crate::scheduler::PlatformScheduler;
 use anyhow::Result;
 use clap::Args as ClapArgs;
 use std::path::PathBuf;
@@ -37,14 +37,14 @@ pub async fn run(args: Args) -> Result<u8> {
         return Ok(1);
     }
 
-    let client = RealLaunchctl;
+    let scheduler = PlatformScheduler;
     match core_run(
         RegisterArgs {
             label: args.label,
             schedule: args.schedule,
             config_path: args.config,
         },
-        &client,
+        &scheduler,
     ) {
         Ok(output) => {
             println!("registered launchd job: com.advisorycron.{}", output.label);

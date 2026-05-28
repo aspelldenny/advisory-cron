@@ -6,7 +6,7 @@
 //!
 //! V2 design principle: every `core::*::run` resolves its own env dependencies
 //! (home dir, launch_agents_dir, self_exe) internally via stdlib calls.
-//! The ONLY injected dependency is `&L: LaunchctlClient` (for testability).
+//! The ONLY injected dependency is `&S: Scheduler` (for testability).
 
 pub mod config_path;
 pub mod init;

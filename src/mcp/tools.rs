@@ -16,7 +16,7 @@ use rmcp::{
 };
 
 use crate::core;
-use crate::launchd::RealLaunchctl;
+use crate::scheduler::PlatformScheduler;
 
 /// MCP server handler — stateless, `Default`-derived.
 #[derive(Default)]
@@ -252,14 +252,14 @@ fn handle_register(args: serde_json::Map<String, serde_json::Value>) -> CallTool
         None => None,
     };
 
-    let client = RealLaunchctl;
+    let scheduler = PlatformScheduler;
     match core::register::run(
         core::register::RegisterArgs {
             label,
             schedule,
             config_path,
         },
-        &client,
+        &scheduler,
     ) {
         Ok(output) => tool_ok(&output),
         Err(e) => tool_error(format!("{e:#}")),
@@ -284,10 +284,10 @@ fn handle_unregister(args: serde_json::Map<String, serde_json::Value>) -> CallTo
         None => None,
     };
 
-    let client = RealLaunchctl;
+    let scheduler = PlatformScheduler;
     match core::unregister::run(
         core::unregister::UnregisterArgs { label, config_path },
-        &client,
+        &scheduler,
     ) {
         Ok(output) => tool_ok(&output),
         Err(e) => tool_error(format!("{e:#}")),
@@ -335,14 +335,14 @@ fn handle_status(args: serde_json::Map<String, serde_json::Value>) -> CallToolRe
         .map(|n| n as usize)
         .unwrap_or(5);
 
-    let client = RealLaunchctl;
+    let scheduler = PlatformScheduler;
     match core::status::run(
         core::status::StatusArgs {
             label,
             config_path,
             last,
         },
-        &client,
+        &scheduler,
     ) {
         Ok(report) => tool_ok(&report),
         Err(e) => tool_error(format!("{e:#}")),
