@@ -6,6 +6,30 @@
 
 ---
 
+## 2026-05-28 — P013: Phase 3.2 — Linux cron-tab impl (sync stdlib, V2)
+
+**Phiếu:** P013 (Tầng 1 — new security boundary `crontab` shell-out + INV-22 enforcement)
+
+**Scope:** Replace `CrontabScheduler` stub (`bail!` P013) in `src/scheduler/linux.rs` with real `crontab -l/-` injection flow. INV-22 defense-in-depth via shared label allowlist. P012 watch-item closed.
+
+**V2 sync stdlib pivot (Debate Log Turn 1+2):** Worker CHALLENGE Turn 1 caught two fatal V1 bugs: (a) `use tokio::io::AsyncWriteExt` requires `io-util` feature (absent from `Cargo.toml`); (b) `tokio::runtime::Runtime::new().block_on(...)` inside `#[tokio::main]` context panics at runtime (`"Cannot start a runtime from within a runtime"`). V2 replaces both with `std::process::Command` (sync, blocking) + `std::io::Write::write_all` — zero feature flag addition, zero nested-runtime risk. `Cargo.toml` diff = ZERO.
+
+**Changes:**
+- **EDIT** `src/scheduler/linux.rs`: stub replaced with real `CrontabScheduler` impl — `read_user_crontab` (`crontab -l`, graceful "no crontab" fallback), `write_user_crontab` (scoped-drop stdin pattern + `wait_with_output`), tag-line idempotency (`# advisory-cron: <label>`), INV-22 defense-in-depth point 2 in each method. 6 unit tests (label rejection).
+- **EDIT** `src/scheduler/mod.rs`: added shared `pub fn is_valid_label` helper (single source of truth for INV-12 + INV-22 label allowlist — ASCII alphanumeric + `-` + `_`). 4 unit tests.
+- **EDIT** `src/scheduler/macos.rs`: replaced local `is_valid_label_inline` with call to `super::is_valid_label` (same allowlist, zero behavior diff).
+- **EDIT** `src/cli/register.rs`: gated `plist_path` print on `!is_empty()` — closes P012 P013 watch-item (Linux render no longer shows blank `plist:` line).
+- **CREATE** `tests/cli_register_linux.rs`: 7 new Linux integration tests gated `#[cfg(target_os = "linux")]` via mock `crontab` binary in `TempDir` PATH injection. Covers: register writes tagged line, unregister removes tagged line, idempotent re-register, status loaded/unloaded, invalid label INV-22 pre-flight, preserves user lines.
+- **EDIT** `docs/ARCHITECTURE.md`: split §Cron mechanism → "macOS (launchd plist)" + "Linux (crontab injection)" subsections. Updated §Modules table. Phase 3.2 ⏸️ → ✅.
+
+**Tests:** 129 (P012 baseline) → 143 total (+14 new: 6 `scheduler::linux`, 4 `scheduler::mod`, 4 `scheduler::tests` shared allowlist + 7 integration linux — 3 old linux stub tests replaced). All pass Linux WSL2.
+
+**Linux dogfood smoke (Sub-mech A — WSL2):** `advisory-cron register --label p013-smoke` → exit 0, 1 tagged line added to crontab, no `plist:` blank line printed, no nested-runtime panic. `advisory-cron status --label p013-smoke --json` → `plist_loaded: true`, `next_fire: null` (expected P013 limitation). `advisory-cron unregister --label p013-smoke` → exit 0, diff to before-snapshot = 0 lines. Idempotency: 2× register → 1 line. Invalid label (`foo;evil`) → exit 2, crontab unchanged (INV-22 point 1 hold confirmed).
+
+**Cargo.toml diff: ZERO.** No new dep, no new tokio feature flag.
+
+---
+
 ## 2026-05-28 — P012: Phase 3.1 — Scheduler trait abstract
 
 **Phiếu:** P012 (Tầng 1 — refactor, module add/remove)

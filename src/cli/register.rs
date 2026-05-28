@@ -48,7 +48,9 @@ pub async fn run(args: Args) -> Result<u8> {
     ) {
         Ok(output) => {
             println!("registered launchd job: com.advisorycron.{}", output.label);
-            println!("  plist: {}", output.plist_path.display());
+            if !output.plist_path.as_os_str().is_empty() {
+                println!("  plist: {}", output.plist_path.display());
+            }
             Ok(0)
         }
         Err(e) => {

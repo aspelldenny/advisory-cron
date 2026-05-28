@@ -6,6 +6,8 @@
 
 ---
 
+- 2026-05-28 P013: Linux cron-tab sync stdlib impl shipped; V2 pivot saved nested-runtime panic + missing io-util feature (Worker CHALLENGE Turn 1 catch); mock crontab TempDir+PATH pattern for integration tests; `working_dir` still dead on Linux (`RegisterIntent` allow(dead_code) stays); dogfood smoke WSL2 verified register/unregister/idempotency/invalid-label all clean → see docs/discoveries/P013.md
+
 - 2026-05-28 P012: Scheduler trait extracted (src/launchd.rs deleted → src/scheduler/{mod,macos,linux}.rs; PlatformScheduler compile-time alias; Linux WSL2 build 4.7MB clean; 129 tests Linux (11 macos-gated moved to macos.rs + 4 integration gated + 3 new linux stub tests); P013 watch-item: plist_path empty render on Linux when CrontabScheduler ships; INV-10/11/12/13/17 preserved; no schema/dep/CLI change) → see docs/discoveries/P012.md
 
 - 2026-05-27 P011: Sprint debt cleanup shipped (INV-12 label sanitization pre-flight confirmed already in place in core::register::run + core::unregister::run — BACKLOG debt items 1+2 were stale; +3 named attack-class tests added for register pre-flight; .git/hooks/pre-commit DISCOVERIES regex aligned with CLAUDE.md doctrine list-item form, legacy H2 kept for backwards-compat; 141→144 tests; item 3 fire_task no-timeout stays deferred; no INV/schema/dep change) → see docs/discoveries/P011.md

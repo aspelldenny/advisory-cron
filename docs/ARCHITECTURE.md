@@ -52,9 +52,9 @@ Planned module layout for Phase 1. Worker may adjust per phiếu's spec (Archite
 | `src/mcp/tools.rs` | `AdvisoryCronHandler` implementing rmcp `ServerHandler`. 5 tools with hand-written JSON schemas (Decision 3). INV-18 validation (`validate_label`, `validate_config_path`) at MCP boundary before `core::*` call. Tool errors as `is_error=true` results. | 1.7 ✅ |
 | `src/config.rs` | TOML config schema (serde-derive). Validation on load. | 1.2 ✅ |
 | ~~`src/launchd.rs`~~ | **Deleted Phase 3.1 (P012).** Content moved to `src/scheduler/macos.rs`. | ~~1.3 ✅ → 1.5 ✅~~ DELETED |
-| `src/scheduler/mod.rs` | `Scheduler` trait + `RegisterIntent`/`RegisterReport`/`UnregisterReport`/`SchedulerStatus` types. `PlatformScheduler` compile-time alias. `NoopScheduler` (test impl). Phase 3.1 (P012). | 3.1 ✅ |
+| `src/scheduler/mod.rs` | `Scheduler` trait + `RegisterIntent`/`RegisterReport`/`UnregisterReport`/`SchedulerStatus` types. `PlatformScheduler` compile-time alias. `NoopScheduler` (test impl). Shared `is_valid_label` helper (P013) used by both `macos.rs` defense-in-depth AND `linux.rs` defense-in-depth (single source of truth for INV-12 + INV-22 allowlist). Phase 3.1 (P012). | 3.1 ✅ |
 | `src/scheduler/macos.rs` | `MacosScheduler` implements `Scheduler` for macOS (launchd). Plist XML generation, `launchctl` shell-out, INV-10/11/12/13/17 enforcement all INSIDE this module. `RealLaunchctl` + `LaunchctlClient` private (file-internal). Gated `#[cfg(target_os = "macos")]`. Phase 3.1 (P012). | 3.1 ✅ |
-| `src/scheduler/linux.rs` | `CrontabScheduler` stub: `impl Scheduler` bails `"Phase 3.2 (P013) chưa ship"` for every method. Gated `#[cfg(target_os = "linux")]`. Real implementation lands P013. Phase 3.1 (P012). | 3.1 ✅ (stub) |
+| `src/scheduler/linux.rs` | Real impl: `CrontabScheduler` uses `crontab -l` (read, tolerate `no crontab for user` stderr) + `crontab -` (stdin pipe write) — **sync `std::process::Command`** (zero tokio runtime nesting, zero new feature flag). Tag-line idempotency `# advisory-cron: <label>`. INV-22 defense-in-depth via `super::is_valid_label`. Gated `#[cfg(target_os = "linux")]`. Phase 3.2 (P013). | 3.2 ✅ |
 | `src/runner.rs` | `tokio::process::Command` task spawn + capture stdout/stderr/exit. `RunResult` struct. | 1.4 ✅ |
 | `src/heartbeat.rs` | JSONL atomic append (temp+fsync+rename per INV-21) + read-last-N with partial-last-line tolerance. `HeartbeatRecord` struct (durable schema, unchanged since P004). `tail_utf8` helper. | 1.4 ✅ + 2.3 crash-safe ✅ |
 | `src/alert.rs` | `TelegramAlert::send_with_base` outbound POST to Telegram Bot API. Best-effort (alert fail ≠ task fail). Env-free module — the API base test-seam env var is read at the call site in `core::run::run`, NOT here. INV-19 boundary (10s timeout double-guard: reqwest client + `tokio::time::timeout`). `format_failure_message` centralises message format. | 2.1 ✅ |
@@ -183,9 +183,9 @@ Validation errors → exit code 2 per §CLI surface exit codes.
 
 ---
 
-## Cron mechanism (Phase 1 — launchd)
+## Cron mechanism — macOS (launchd plist)
 
-`advisory-cron register` generates a plist file at `~/Library/LaunchAgents/com.advisorycron.<label>.plist`:
+`advisory-cron register` on macOS generates a plist file at `~/Library/LaunchAgents/com.advisorycron.<label>.plist`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -236,6 +236,36 @@ Then `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.advisorycron.<labe
 **Bootout idempotency note:** empirically verified (Anchor #17) — when label not loaded, `launchctl bootout` exits 3 with stdout `"Boot-out failed: 3: No such process"`. advisory-cron treats ANY non-zero launchctl exit as warn-continue (no substring branching).
 
 **Why launchd and not cron?** Sếp uses macOS. launchd is the native scheduler — handles sleep/wake, integrates with GUI session, doesn't need crontab editing. Linux support via systemd timer or cron deferred to Phase 3.
+
+---
+
+## Cron mechanism — Linux (crontab injection)
+
+`advisory-cron register` on Linux invokes `crontab -l` to read the user's existing crontab, filters out any prior advisory-cron-managed line tagged `# advisory-cron: <label>` (idempotent re-register), appends a new managed line, and pipes the result back via `crontab -` (stdin):
+
+```
+<minute> <hour> * * * <self_exe> run # advisory-cron: <label>
+```
+
+Example: `register --label scan --schedule "0 9 * * *"` writes:
+
+```
+0 9 * * * /home/sep/.cargo/bin/advisory-cron run # advisory-cron: scan
+```
+
+**Sync shell-out (P013 V2):** the Linux impl uses sync `std::process::Command` for both `crontab -l` and `crontab -`. The `Scheduler` trait is sync (P012), and the CLI entry runs under `#[tokio::main]` — using `tokio::process::Command` would either require `io-util` feature (absent) or a nested `tokio::runtime::Runtime` (panics inside an existing runtime). Stdlib `std::process` + `std::io::Write` is the natural fit: zero new feature flag, zero nested-runtime risk, ~10ms blocking cost per call is negligible at ~1 register/day.
+
+**Cron form constraint (Phase 3.2):** daily form `M H * * *` only (parity with macOS launchd `StartCalendarInterval` per Phase 1 INV-11). Full 5-field cron (ranges, lists, steps, DOW) deferred to P014 INV-23.
+
+**"No crontab" graceful path:** when the user has no crontab yet, `crontab -l` exits 1 with stderr `"no crontab for <user>"`. `CrontabScheduler::register` treats this as empty input and proceeds normally. `CrontabScheduler::status` returns `is_registered: false` silently (mirrors macOS `bootout` idempotent fallback).
+
+**Last-writer-wins race:** between `crontab -l` (read) and `crontab -` (write), another process modifying the user crontab races. P013 accepts last-writer-wins. Hardening (advisory `flock(2)` on sentinel) deferred — Phase 3.5+ if dogfood reveals need.
+
+**No `--config` interpolation:** the managed line invokes `advisory-cron run` with no `--config` flag, mirroring the macOS plist `ProgramArguments = ["<self_exe>", "run"]` pattern. `run` resolves config via `core::config_path::default_config_path()`. If Sếp uses non-default config path, Phase 3.5+ `RegisterIntent` extension would be required.
+
+**No stdout/stderr redirect:** the cron line omits redirect operators (`> /path`). cron discards stdout/stderr by default (or mails on some distros). `advisory-cron run` writes its own heartbeat JSONL via `core::run::run` — the durable observability record. Manual `> /path` redirect can be added post-register by editing the crontab line directly (NOT preserved on re-register — Phase 3.5+ concern).
+
+**`next_fire` parsing:** Phase 3.2 (P013) does NOT parse `M H * * *` from the Linux descriptor — `core::status::run` calls `parse_next_fire` which is macOS-format-specific. On Linux `next_fire` renders `None`. P014 INV-23 adds a parallel `parse_cron_descriptor` parser when full 5-field cron support lands.
 
 ---
 
@@ -375,7 +405,7 @@ Error categories (anyhow context chain):
 - ✅ **Phase 2** — COMPLETE. Phase 2.1 (Telegram alert) shipped per P008. Phase 2.2 (retry policy) shipped per P009 (`is_retryable` private fn + retry loop in `core/run.rs`; 1 heartbeat per attempt schema preserved; alert moved OUTSIDE loop per INV-20 single-alert-per-invocation; `[retry]` opt-in config block). Phase 2.3 (state recovery) shipped per P010 (heartbeat `append` refactored to temp+fsync+rename atomic protocol; `read_last_n` tolerates corrupt last line; INV-21 added; no schema change). **All 10 phiếu of the sprint shipped — sprint closes 2026-05-27.**
 - 🚧 **Phase 3** — In progress.
   - ✅ **Phase 3.1** (P012): `Scheduler` trait extracted. `src/launchd.rs` → `src/scheduler/{mod,macos,linux}.rs`. `PlatformScheduler` compile-time alias. macOS behavior unchanged; Linux stub compiles (`bail!` P013). Linux WSL2 build verified: 4.7MB binary, zero warnings.
-  - ⏸️ **Phase 3.2** (P013): `CrontabScheduler` real implementation (crontab `register`/`unregister`/`status`). INV-22/23 (label allowlist + cron expression validation for crontab). Deferred.
+  - ✅ **Phase 3.2** (P013): `CrontabScheduler` real impl shipped — sync `std::process::Command` for `crontab -l`/`-` (no tokio feature add, no nested-runtime panic), INV-22 defense-in-depth via shared `scheduler::is_valid_label`, Linux WSL2 dogfood smoke verified (register/unregister round-trip clean, idempotency confirmed), 14 new tests (143 total), binary 4.8MB. P012 watch-item closed (empty `plist_path` render gated in `cli/register.rs`).
   - ⏸️ **Phase 3.3** (P014): CI matrix (macOS + Linux parallel jobs). Deferred.
 
 *(Worker updates this section at end of each phase EXECUTE — Tầng 2 status text.)*
