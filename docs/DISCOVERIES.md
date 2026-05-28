@@ -6,6 +6,8 @@
 
 ---
 
+- 2026-05-28 P014: INV-22 (crontab shell-out boundary 5 sub-rules) + INV-23 (daily-form cron invariant both platforms + both parsers) appended to INVARIANTS.md (21→23); ci.yml 2-OS matrix created from scratch; Worker CHALLENGE Turn 1 caught 4-location is_valid_label drift + missing parse_simple_cron trigger keyword + false NoopScheduler claim in ci.yml comment → all 3 accepted in V2; first CI run observation pending → see docs/discoveries/P014.md
+
 - 2026-05-28 P013: Linux cron-tab sync stdlib impl shipped; V2 pivot saved nested-runtime panic + missing io-util feature (Worker CHALLENGE Turn 1 catch); mock crontab TempDir+PATH pattern for integration tests; `working_dir` still dead on Linux (`RegisterIntent` allow(dead_code) stays); dogfood smoke WSL2 verified register/unregister/idempotency/invalid-label all clean → see docs/discoveries/P013.md
 
 - 2026-05-28 P012: Scheduler trait extracted (src/launchd.rs deleted → src/scheduler/{mod,macos,linux}.rs; PlatformScheduler compile-time alias; Linux WSL2 build 4.7MB clean; 129 tests Linux (11 macos-gated moved to macos.rs + 4 integration gated + 3 new linux stub tests); P013 watch-item: plist_path empty render on Linux when CrontabScheduler ships; INV-10/11/12/13/17 preserved; no schema/dep/CLI change) → see docs/discoveries/P012.md

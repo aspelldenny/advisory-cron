@@ -6,6 +6,41 @@
 
 ---
 
+## 2026-05-28 — P014: Phase 3.3 — INV-22 + INV-23 formal entries + cross-OS CI matrix
+
+**Phiếu:** P014 (Tầng 1 — docs/security/INVARIANTS.md doctrine surface + new GitHub Actions workflow file)
+
+**Scope:** Formalise INV-22 (`crontab` shell-out boundary — 5 sub-rules) + INV-23 (cron expression daily-form invariant) in `docs/security/INVARIANTS.md`. Create `.github/workflows/ci.yml` 2-OS matrix (`macos-latest` + `ubuntu-latest`). ARCHITECTURE.md §Phase status 3.3 ⏸️ → ✅ + new §CI matrix subsection. No code change (zero `src/` diff).
+
+**INV-22 (5 sub-rules):**
+1. Discrete-arg shell-out (no `sh -c` interpolation against `crontab`).
+2. Label allowlist 2-point — pre-flight in `core::*::run` (INV-12 existing, 3 inline copies at `src/core/{register,unregister,status}.rs`) + defense-in-depth `super::is_valid_label` first line of each `CrontabScheduler::*` method (P013 shipped at `src/scheduler/mod.rs`, scheduler-boundary single source). 4-location reality documented in sub-rule 2 Note + Phase 3.5+ consolidation deferred.
+3. Tag-only filter idempotency (`# advisory-cron: <label>` substring match — preserve user's other crontab lines).
+4. Sync `std::process::Command` only (V2 P013 lesson — no nested-runtime panic from `#[tokio::main]` context).
+5. TOCTOU read-modify-write race acknowledged + deferred Phase 3.5+ (cross-ref ARCHITECTURE.md §Cron mechanism Linux).
+
+**INV-23 (Option A — conservative):** Documents daily-form `M H * * *` cron expression invariant for BOTH platforms. Linux cron-tab native full 5-field support intentionally constrained to daily-form for cross-platform `RegisterIntent` shape parity. Both parsers (`src/core/register.rs::parse_daily_cron` + `src/scheduler/macos.rs::parse_simple_cron`) enforce daily-form via separate codepaths — Phase 3.5+ consolidation candidate. Future full 5-field expansion deferred to separate phiếu (would require `RegisterIntent` extension + 7 numbered scope items per INV-23 sub-rule 4).
+
+**CI matrix:**
+- `matrix: os: [macos-latest, ubuntu-latest]`, `fail-fast: false`.
+- Each job: `cargo fmt --check` → `cargo build --release` → `cargo test --all` → `cargo clippy --all-targets -- -D warnings`.
+- Linux job pre-step `which crontab` (Sub-mechanism B capability smoke — fails loud if `cron` package missing).
+- macOS sandbox safety model: unit tests in `scheduler::macos` use `NoopLaunchctl` (no real `launchctl`); integration tests in `tests/cli_register.rs` spawn binary + rely on graceful degradation when `launchctl bootstrap` unavailable on GHA — observe-first DP4.
+- Toolchain: `dtolnay/rust-toolchain@stable` with `clippy, rustfmt` components.
+- Checkout: `actions/checkout@v4`.
+
+**Doctrine surface counts:** INV total 21 → 23 (+INV-22 +INV-23).
+
+**Debate Log:** 2 turns (V1 DRAFT → Worker CHALLENGE Turn 1 → Architect RESPOND Turn 2 → V2 final). 3 ACCEPT on factual-accuracy objections (O1.1 `parse_simple_cron` Trigger gap, O1.2 `is_valid_label` 4-location reality, O1.3 ci.yml false `NoopScheduler` claim). No scope/design change.
+
+**Test count delta:** 143 (P013 baseline) → 143 (no new tests in P014 — doctrine + CI only). First successful CI run is the new "pass" signal.
+
+**Surfaced debt item:** `[DEBT] core layer is_valid_label consolidation (Phase 3.5+ Tầng 2)` — 3 inline copies in `src/core/{register,unregister,status}.rs` predate P013's scheduler-layer consolidation. To be added to `docs/BACKLOG.md` "Open backlog" by Quản đốc post-merge.
+
+**No code change, no `Cargo.toml` change, no dep change, no CLI / MCP / config schema change.** P014 is the doctrine + infra phiếu mirroring P007's role for Phase 1 (post-ship polish — but for Phase 3 it lands BEFORE Phase 3.4 README per BACKLOG sequencing).
+
+---
+
 ## 2026-05-28 — P013: Phase 3.2 — Linux cron-tab impl (sync stdlib, V2)
 
 **Phiếu:** P013 (Tầng 1 — new security boundary `crontab` shell-out + INV-22 enforcement)

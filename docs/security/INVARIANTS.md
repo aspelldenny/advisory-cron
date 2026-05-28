@@ -343,6 +343,68 @@ The label becomes part of a filesystem path (`~/Library/LaunchAgents/com.advisor
 
 ---
 
+### INV-22 — `crontab` shell-out boundary: discrete-arg + label allowlist 2-point + tag-only filter + sync stdlib + TOCTOU acknowledged
+
+**Statement:** PR introducing or modifying Linux `crontab` shell-out (`src/scheduler/linux.rs::CrontabScheduler::{register, unregister, status}` or any future `crontab` invocation) MUST satisfy ALL of:
+
+1. **Discrete-arg shell-out (no shell interpolation):** Both `crontab -l` (read) and `crontab -` (stdin write) MUST be invoked via `std::process::Command::new("crontab").arg("-l")` or `.arg("-")` — discrete args only, NEVER `Command::new("sh").arg("-c").arg(format!("crontab ... {user_value}"))`. The `crontab` binary itself does NOT parse a shell line; stdin content is written via `child.stdin.write_all(...)` (sync `std::io::Write`).
+
+2. **Label allowlist 2-point enforcement (defense-in-depth):**
+   - **Point 1 (caller pre-flight):** `core::register::run` / `core::unregister::run` / `core::status::run` validate `label` via their respective local `is_valid_label` helper (INV-12 allowlist) BEFORE invoking the scheduler. This already exists pre-P013 (mirrors macOS path).
+   - **Point 2 (defense-in-depth, inside each `CrontabScheduler` method):** the first executable line of `CrontabScheduler::register`, `::unregister`, `::status` is `if !super::is_valid_label(label) { bail!(...) }` — single source of truth **FOR THE SCHEDULER BOUNDARY** is `src/scheduler/mod.rs::is_valid_label` (ASCII alphanumeric + `-` + `_`, non-empty). The same scheduler-layer helper backs `MacosScheduler::unregister` (single scheduler-layer allowlist for both schedulers — INV-12 and INV-22 share one helper at the scheduler boundary).
+   - **Note on the 4-location reality:** `src/core/{register,unregister,status}.rs` each carry a local `is_valid_label` copy that predates P013's scheduler-layer consolidation. These 3 core-layer copies are kept consistent with the scheduler-layer source by convention, but they are NOT the scheduler's single source of truth — they are independent pre-flight guards (Point 1 above). Consolidation of the 4 copies into a single crate-wide helper is OUT OF SCOPE for P013/P014 and deferred to Phase 3.5+ (or a dedicated refactor phiếu — see DP7 in P014 Decision Log). A future Worker changing the allowlist characters MUST update all 4 locations atomically; INV-22 sub-rule 2 + INV-12 jointly cover the audit surface until consolidation lands.
+
+3. **Tag-only filter idempotency (don't touch user's other crontab lines):** Both `register` and `unregister` MUST filter the user's existing crontab by substring match on `# advisory-cron: <label>` only. Lines without this tag MUST pass through unmodified to the `crontab -` stdin pipe. This guarantees: (a) re-registering the same label replaces (not duplicates) the line; (b) user's non-advisory-cron crontab entries are preserved; (c) `unregister` removes only the tagged line.
+
+4. **Sync `std::process::Command` only (no nested-runtime panic):** The `Scheduler` trait is sync. From `#[tokio::main]` context, calling `tokio::runtime::Runtime::new().block_on(...)` panics: `"Cannot start a runtime from within a runtime"`. Linux scheduler impl MUST use `std::process::Command` (blocking) — NOT `tokio::process::Command` + nested runtime bridge. Blocking shell-out (~10ms per call, ~3 calls/register) is acceptable for the workflow. This rule was learned the hard way in P013 V1 → V2 pivot (Worker CHALLENGE Turn 1 catch — see `docs/discoveries/P013.md`).
+
+5. **TOCTOU race acknowledged + deferred (Phase 3.5+):** Between `crontab -l` (read) and `crontab -` (write), another process modifying the user's crontab races. P013 accepts last-writer-wins. Hardening (advisory `flock(2)` on a sentinel file, e.g. `~/.local/state/advisory-cron/crontab.lock`) is OUT OF SCOPE for Phase 3.2/3.3 and deferred to Phase 3.5+ if dogfood reveals real concurrent-modification incidents. See `docs/ARCHITECTURE.md` §Cron mechanism — Linux (crontab injection) "Last-writer-wins race" paragraph for the full discussion.
+
+**Why:** `crontab` is the FIRST shell-out boundary on Linux (parallel to `launchctl` boundary on macOS — INV-10/12/17). The user crontab is a multi-process shared resource (cron daemon reads it; `crontab -e` edits it; external tools may write it). advisory-cron MUST: (a) never inject shell metacharacters via labels (allowlist), (b) never clobber other crontab lines (tag-only filter), (c) never deadlock or panic at runtime (sync stdlib avoids nested-runtime trap). Without any one of these, advisory-cron either creates an injection vector OR silently destroys the user's other cron jobs OR hangs the CLI.
+
+**Implementation (Phase 3.2 — P013):** `src/scheduler/linux.rs::CrontabScheduler::{register, unregister, status}` — each starts with `if !super::is_valid_label(label) { bail!(...) }`. Scheduler-boundary helper `src/scheduler/mod.rs::is_valid_label` (single source for the scheduler layer; 3 core-layer copies at `src/core/{register,unregister,status}.rs` predate P013 — see sub-rule 2 Note). Tag prefix constant `const TAG_PREFIX: &str = "# advisory-cron: ";` used by both filter (read side) and emit (write side). `read_user_crontab` + `write_user_crontab` private helpers use `std::process::Command` + `std::io::Write::write_all` (sync stdlib, no tokio I/O).
+
+**Trust boundary:** `crontab` binary is part of the host's standard `cron` package (Linux distro convention). advisory-cron does NOT validate or fingerprint the `crontab` binary — Phase 3 trusts the host PATH (same trust model as `tokio::process::Command::new("launchctl")` on macOS per INV-10). If the host has a malicious `crontab` shim in PATH, advisory-cron is already compromised at install time; this is out of scope for runtime defense.
+
+**Trigger keywords:** `CrontabScheduler::*` method bodies, `Command::new("crontab")` (sync or tokio), `Command::new("sh").arg("-c")` combined with format strings containing user input near scheduler code, `tokio::runtime::Runtime::new` + `block_on` near scheduler code (forbidden), `OpenOptions` against user's crontab path (forbidden — must use `crontab -` stdin pipe), new `flock(2)` usage near `crontab` calls (would be the Phase 3.5+ hardening — explicit phiếu required), `is_valid_label` modifications in ANY of the 4 locations (`src/scheduler/mod.rs`, `src/core/{register,unregister,status}.rs` — Worker MUST update all 4 atomically until Phase 3.5+ consolidation lands).
+
+**Status:** Active.
+
+**Implemented in Giám sát:** No (project-local). Worker self-checks during EXECUTE (unit tests for invalid-label rejection in `scheduler::linux::tests` + integration tests in `tests/cli_register_linux.rs` for tag-filter idempotency + dogfood smoke for end-to-end). Giám sát soi PR diff for `crontab`-related changes; if PR reintroduces `tokio::process::Command` against `crontab` OR `Runtime::new().block_on` near scheduler code OR removes the `is_valid_label` first-line check OR mutates only a subset of the 4 `is_valid_label` copies, flag as INV-22 violation.
+
+---
+
+### INV-23 — Cron expression validation: daily-form `M H * * *` only for both platforms in Phase 3
+
+**Statement:** PR introducing or modifying `register --schedule <cron>` parsing in `src/core/register.rs::parse_daily_cron` OR the parallel macOS-scheduler-internal parser `src/scheduler/macos.rs::parse_simple_cron` (or any future cron-expression-accepting code path) MUST satisfy ALL of:
+
+1. **Daily form only (Phase 3 invariant):** the accepted cron expression form is `<minute> <hour> * * *` where all of day-of-month, month, day-of-week are literal `*`. Ranges (`1-5`), lists (`1,3,5`), steps (`*/2`), and day-of-week / day-of-month constraints are REJECTED with a parse error (exit code 1, `anyhow` context citing the offending expression). The accepted form mirrors Phase 1 macOS `StartCalendarInterval` Hour + Minute calendar form per ARCHITECTURE.md §Cron mechanism — macOS.
+
+2. **Cross-platform parity (no Linux asymmetry in Phase 3):** Linux cron-tab natively supports the full 5-field cron expression. P013 deliberately constrained the Linux scheduler to the same daily form as macOS to preserve a single `RegisterIntent` shape (`{ label, hour: u8, minute: u8, self_exe, working_dir }`) across both schedulers. Extending Linux to full 5-field WITHOUT extending `RegisterIntent` would create an asymmetry where `--schedule "0 9 * * 1-5"` would work on Linux but error on macOS — a usability foot-gun. Phase 3 explicitly chooses parity over Linux-native expressiveness.
+
+3. **Hour ∈ 0..=23, Minute ∈ 0..=59 bounds-check at parse time:** Both parsers MUST `.parse::<u8>()` both fields and bounds-check before returning. Out-of-range values (e.g. `25 0 * * *`) exit 1 with parse error citing the bound. Empty fields, non-numeric fields, and negative numbers all reject at the `u8` parse step (no `i32` cast to silently round-trip negatives).
+
+4. **No code change in P014:** INV-23 is a DOCTRINE formalisation of the constraint shipped in P012 + P013. The `parse_daily_cron` implementation in `src/core/register.rs` AND the parallel `parse_simple_cron` in `src/scheduler/macos.rs` are unchanged by P014. Future expansion to full 5-field cron is OUT OF SCOPE and would require a separate Tầng 1 phiếu that updates: (a) `parse_daily_cron` → renamed/replaced with `parse_cron_expression` (and same treatment for `parse_simple_cron`), (b) `RegisterIntent` extended with a `cron_expr: String` field OR a new variant enum, (c) `MacosScheduler::register` plist generation forced to error on non-daily expressions (launchd cannot represent them), (d) `CrontabScheduler::register` permitted to pass the full expression through, (e) `core::status::run` parser extended to render full-cron descriptors, (f) new INV-23 supersession entry documenting the Linux-extends-macOS-rejects asymmetry, (g) parser consolidation (unify `parse_daily_cron` + `parse_simple_cron` into one location — Phase 3.5+ candidate even without the full expansion).
+
+**Why:** macOS launchd `StartCalendarInterval` does NOT have a native crontab parser — it accepts Hour + Minute (+ Weekday + Day, but advisory-cron Phase 1 chose daily form per INV-11 precedent). To preserve a single `RegisterIntent` cross-platform and avoid the foot-gun of "this expression works on Linux but errors on macOS", Phase 3 holds the daily-form line. The asymmetry is acknowledged + documented (this INV is the documentation) and explicitly deferred to a future phiếu when Sếp explicitly requests full 5-field. Sub-mechanism A "ship ≠ chạy": shipping full 5-field Linux WITHOUT the macOS rejection path = silent footgun (a Sếp dogfood expression works on the Linux box, then silently errors when Sếp tries the same config on a Mac).
+
+**Implementation (Phase 3.2 — P013, formalised in P014):** Two parsers currently enforce this invariant via separate codepaths:
+
+- `src/core/register.rs::parse_daily_cron` — caller-side / domain-layer parser. Accepts `&str`, splits on whitespace, asserts exactly 5 fields, asserts fields 3/4/5 are literal `*`, parses fields 1/2 as `u8`, bounds-checks. Returns `(hour: u8, minute: u8)` tuple (or `anyhow::Result` error chain). Called from `cli/register.rs` BEFORE `core::register::run` invocation; the validated tuple becomes `RegisterIntent.hour` + `.minute`.
+- `src/scheduler/macos.rs::parse_simple_cron` — scheduler-internal parser (macOS-only). Same daily-form constraint, same bounds-check; used inside `MacosScheduler::*` to re-validate expressions before plist emission. Independent codepath from `parse_daily_cron` (both enforce the same INV-23, but a Worker changing one MUST verify the other still matches — Phase 3.5+ consolidation candidate per sub-rule 4 item (g)).
+
+Linux scheduler emits `format!("{minute} {hour} * * *", ...)` — guaranteed daily-form by construction.
+
+**Trust boundary:** the cron expression is user-controlled (CLI flag `--schedule` OR config file `[schedule]` block). All validation happens at parse time before any side effect (plist write OR crontab pipe). An invalid expression produces a parse error + exit 1 with NO file mutation. The parse is a pure function of input string + a constant grammar — no external service, no shell-out, no allocation beyond the parsed tuple.
+
+**Trigger keywords:** `parse_daily_cron` call sites (`src/core/register.rs`), `parse_simple_cron` call sites (`src/scheduler/macos.rs` — parallel daily-form parser, same constraint, separate codepath), `parse_cron_expression` (NEW — future phiếu), new `RegisterIntent` fields touching cron representation, `StartCalendarInterval` plist key additions (Weekday, Day keys would expand macOS form), `cron::Schedule` or `croner` or `cron-parser` crate additions (would imply full 5-field — out of scope Phase 3).
+
+**Status:** Active.
+
+**Implemented in Giám sát:** No (project-local). Worker self-checks during EXECUTE (unit tests in `src/core/register.rs::tests` + `src/scheduler/macos.rs::tests` for daily-form acceptance + non-daily rejection + bounds-check). Giám sát soi PR diff for cron-expression changes; if PR adds a new cron parser, extends `RegisterIntent` cron shape, extends `StartCalendarInterval` plist keys, OR modifies `parse_daily_cron` / `parse_simple_cron` without an accompanying INV-23 supersession entry, flag as INV-23 violation.
+
+---
+
 ## How INV are checked
 
 1. Worker pushes PR.

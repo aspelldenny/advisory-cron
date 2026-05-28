@@ -318,6 +318,33 @@ Replace `<user>` with your macOS username. Verify binary path with `which adviso
 
 ---
 
+## CI matrix (Phase 3.3 — P014)
+
+advisory-cron uses a 2-OS GitHub Actions matrix to guarantee cross-OS health on every push + PR against `main`:
+
+| Job | Runner | Tests gated | Tests common |
+|-----|--------|-------------|--------------|
+| `test (macos-latest)` | macos-latest (Apple Silicon) | `scheduler::macos` unit tests (use in-module `NoopLaunchctl` — no real `launchctl`) + `tests/cli_register.rs` (`#[cfg(target_os = "macos")]`, spawn compiled binary) | `core::*`, `config`, `runner`, `heartbeat`, `alert`, `scheduler::mod` (cross-OS), `mcp::*` |
+| `test (ubuntu-latest)` | ubuntu-latest | `scheduler::linux` unit tests + `tests/cli_register_linux.rs` (`#[cfg(target_os = "linux")]`) | same |
+
+Each job runs (in order, fail-fast within the job):
+1. `cargo fmt --all -- --check`
+2. `cargo build --release`
+3. `cargo test --all`
+4. `cargo clippy --all-targets -- -D warnings`
+
+`fail-fast: false` at the matrix level — if macOS fails we still see the Linux signal (and vice versa) per push.
+
+**Sub-mechanism B capability check (Linux only):** before `cargo test`, the Linux job runs `which crontab` to verify `cron` package is present on the `ubuntu-latest` runner. If absent, the step fails loud — a follow-up phiếu would add `sudo apt-get install -y cron`. The macOS job has no equivalent pre-step because `launchctl` is part of macOS itself (no install step possible).
+
+**macOS GHA sandbox safety model (two layers):** P012 design intent splits the macOS test surface into two:
+1. **Unit tests inside `src/scheduler/macos.rs`** — use the in-module `NoopLaunchctl` test impl. These NEVER shell-out to real `launchctl` and run cleanly on any host (Sếp's Mac, GHA `macos-latest` sandbox, future Linux dev box building with `--target x86_64-apple-darwin`).
+2. **Integration tests in `tests/cli_register.rs`** — spawn the compiled binary (per the test file's own header docstring, these CANNOT inject `NoopScheduler`). On the GHA `macos-latest` runner, `launchctl bootstrap` may be unavailable or restricted; integration tests rely on graceful degradation (exit non-zero with a sandbox-related error message rather than panic). DP4 (observe-first): the first CI run reveals which integration tests fail on the sandbox; a Tầng 2 follow-up adds `#[ignore]` or `if: matrix.os != 'macos-latest'` step skip selectively. The only real `launchctl` paths exercised end-to-end live in Sếp's dogfood + manual `advisory-cron register` on a real Mac, not in CI.
+
+**Why no caching, no release artifact upload, no tag-triggered release:** advisory-cron is solo + small binary (~3.9 MB release). Per-job CI ~3 minutes is acceptable. Phase 4+ would add `actions/cache@v4` if CI cost matters; Phase 6+ would add release-on-tag workflow if `cargo publish` is in scope.
+
+---
+
 ## Heartbeat schema
 
 Append-only JSONL at `$XDG_STATE_HOME/advisory-cron/heartbeat.jsonl` (default `~/.local/state/advisory-cron/heartbeat.jsonl`):
@@ -406,6 +433,6 @@ Error categories (anyhow context chain):
 - 🚧 **Phase 3** — In progress.
   - ✅ **Phase 3.1** (P012): `Scheduler` trait extracted. `src/launchd.rs` → `src/scheduler/{mod,macos,linux}.rs`. `PlatformScheduler` compile-time alias. macOS behavior unchanged; Linux stub compiles (`bail!` P013). Linux WSL2 build verified: 4.7MB binary, zero warnings.
   - ✅ **Phase 3.2** (P013): `CrontabScheduler` real impl shipped — sync `std::process::Command` for `crontab -l`/`-` (no tokio feature add, no nested-runtime panic), INV-22 defense-in-depth via shared `scheduler::is_valid_label`, Linux WSL2 dogfood smoke verified (register/unregister round-trip clean, idempotency confirmed), 14 new tests (143 total), binary 4.8MB. P012 watch-item closed (empty `plist_path` render gated in `cli/register.rs`).
-  - ⏸️ **Phase 3.3** (P014): CI matrix (macOS + Linux parallel jobs). Deferred.
+  - ✅ **Phase 3.3** (P014): INV-22 (`crontab` shell-out boundary — 5 sub-rules parallel to INV-10/12/17) + INV-23 (cron expression daily-form invariant cross-platform) appended to `docs/security/INVARIANTS.md`. GitHub Actions CI workflow `.github/workflows/ci.yml` created — `matrix: os: [macos-latest, ubuntu-latest]` running `cargo fmt --check`, `cargo build --release`, `cargo test --all`, `cargo clippy --all-targets -- -D warnings` on each. Linux job pre-step `which crontab` (Sub-mechanism B capability smoke). No code change; doctrine + CI infra only.
 
 *(Worker updates this section at end of each phase EXECUTE — Tầng 2 status text.)*

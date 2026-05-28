@@ -1,0 +1,68 @@
+# advisory-cron CI — cross-OS matrix
+# Created by P014 (Phase 3.3). Runs on every push + PR against main.
+#
+# Jobs:
+#   - macos-latest (Apple Silicon GHA runner — exercises `#[cfg(target_os = "macos")]`-gated
+#     scheduler::macos unit tests; these use the in-module `NoopLaunchctl` test impl —
+#     no real `launchctl bootstrap` shell-out per INV-10 / P012 design.
+#     Integration tests in `tests/cli_register.rs` spawn the compiled binary and CANNOT
+#     inject NoopScheduler (per the test file's own header docstring) — macOS sandbox
+#     safety relies instead on integration tests gracefully degrading when
+#     `launchctl bootstrap` is unavailable on the GHA runner. Observe-first per DP4;
+#     if an integration test fails on GHA macOS, a Tầng 2 follow-up adds
+#     `#[ignore]` or `if: matrix.os != 'macos-latest'` selectively.)
+#   - ubuntu-latest (exercises `#[cfg(target_os = "linux")]`-gated scheduler::linux unit tests +
+#     tests/cli_register_linux.rs integration tests via mock `crontab` binary in PATH).
+#
+# Sub-mechanism B (capability gap) — Linux job pre-step `which crontab` fails loud if `cron` package
+# is missing from the ubuntu-latest runner image. If failure: DISCOVERY_REPORT + follow-up phiếu adds
+# `sudo apt-get install -y cron` step.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: cargo test + clippy + fmt (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Show Rust version
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Linux — verify `crontab` capability (Sub-mech B)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          which crontab
+          crontab -l 2>&1 || echo "(no crontab for runner user — expected, exit 1 acceptable)"
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo build --release
+        run: cargo build --release
+
+      - name: cargo test --all
+        run: cargo test --all
+
+      - name: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
