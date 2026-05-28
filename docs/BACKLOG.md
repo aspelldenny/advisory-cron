@@ -8,45 +8,52 @@
 
 ---
 
-## 🔥 Active sprint: Phase 1 — MVP launchd plist fire + heartbeat + MCP wrapper
+## 🔥 Active sprint: Phase 3 — Linux support (cron-tab)
 
-> **Mục tiêu:** Ship single binary `advisory-cron` chạy được trên macOS — register/unregister launchd plist, fire task on-demand, log heartbeat JSONL, show status, AND expose tất cả qua MCP server (stdio). Sếp dogfood end-to-end với `/advisory-scan` daily 09:00 ICT + Claude Desktop gọi được mọi tool qua MCP.
-> **Kết thúc khi:** Acceptance criteria Phase 1 (PROJECT.md) tick xanh hết + Sếp confirm "đã quan sát launchd fire đúng lịch 3 ngày liên tiếp" + "đã gọi advisory-cron MCP tool từ Claude Desktop".
-> **Started:** 2026-05-27
-> **Scope expanded:** 2026-05-27 — Sếp re-defined ship-gate = CLI + MCP cùng ship. Phase 1.7 added.
+> **Mục tiêu:** Ship `advisory-cron register/unregister/run/status` chạy nguyên si trên Linux qua `crontab -l/-` injection. Heartbeat / runner / config / MCP / CLI surface KHÔNG đổi. Single binary giữ ≤7MB. Compile-time dispatch theo `#[cfg(target_os)]` — macOS path zero regression.
+> **Kết thúc khi:** Phase 3 acceptance gate xanh (xem ngay dưới) + Sếp dogfood 1 ngày trên Linux box hiện tại (WSL2 `/usr/bin/crontab` đã sẵn, no setup).
+> **Started:** 2026-05-28
+> **Out of scope (deferred):** Windows native (Task Scheduler — Phase 5+ nếu Sếp dev Windows host), systemd timer (Phase 3.5 nếu dogfood lộ nhu cầu journald/sandboxing), Linux distro packaging (deb/rpm — Phase 4+).
+>
+> **Decision log (2026-05-28):**
+> - Windows: defer (anh đang ở WSL2 = Linux, Windows native là AI-completeness-bias trừ khi anh thực sự dev/dogfood trên Windows host).
+> - Linux scheduler: cron-tab only. WSL2 probe xác nhận `/usr/bin/crontab` sẵn + `systemd-pid1=NO` (systemd path require `/etc/wsl.conf` toggle + restart — quá nhiều setup tax cho zero benefit ở solo scope).
 
-- [ ] **[NEW]** **Phase 1.1 — Scaffold + CLI surface (clap derive).** Subcommands: `init`, `register`, `unregister`, `run`, `status`. Each subcommand returns proper exit code + help text. Empty implementations (panic with "not yet implemented") + happy-path test for `--help`. Tầng 1 (defines CLI contract for entire tool). ~150 LOC.
+**Acceptance criteria (Phase 3 ship gate):**
+- [ ] `advisory-cron register` trên Linux inject 1 dòng cron tagged `# advisory-cron: <label>` vào user crontab (no shell metachar leak — INV-22 mới).
+- [ ] `advisory-cron unregister` xóa đúng dòng tagged, không động dòng cron khác của user (idempotent — chạy 2 lần = exit 0 cả 2).
+- [ ] `advisory-cron run` + `heartbeat.jsonl` hoạt động y hệt macOS (cùng `runner.rs` + `heartbeat.rs`, zero diff).
+- [ ] `advisory-cron status` trên Linux đọc next-fire từ cron expression (parse `M H * * *` → "daily at HH:MM") + last N heartbeats — render giống macOS.
+- [ ] `advisory-cron mcp` trên Linux: 5 tools handshake + register/run/status callable từ Claude Desktop (config snippet update README).
+- [ ] `cargo build --release` trên macOS: zero behavior change (NoopLaunchctl tests still pass, plist generation untouched).
+- [ ] `cargo build --release` trên Linux: zero warnings, binary ≤7MB.
+- [ ] `cargo test --all` trên Linux: pass (cross-OS test matrix — CI runner thêm Linux job).
+- [ ] README quick-start có 2 paths (macOS launchd + Linux cron) với verification command (`crontab -l | grep advisory-cron` = Sub-mechanism A trigger gap check).
 
-- [ ] **[NEW]** **Phase 1.2 — Config file (TOML + serde).** Schema: `[task]` block (command string, args list, working_dir), `[schedule]` block (cron expression OR launchd-friendly `{hour, minute}`), `[heartbeat]` block (log_path). `advisory-cron init` writes default config with placeholder Claude Code invocation. Validation on load: missing required fields → fail loud with helpful error. Tầng 1 (defines config schema — touched by every subcommand). ~200 LOC.
+**Phiếu phác (Architect sẽ chốt khi DRAFT):**
 
-- [ ] **[NEW]** **Phase 1.3 — launchd plist generator.** Function `generate_plist(config) -> PlistContent`. Plist XML matches Apple's launchd schema (`ProgramArguments`, `StartCalendarInterval`, `StandardOutPath`, `StandardErrorPath`, `Label`). `register` subcommand writes plist to `~/Library/LaunchAgents/com.advisorycron.<label>.plist` then `launchctl bootstrap gui/$UID <path>`. `unregister` does inverse. Tầng 1 (touches user's LaunchAgents — must be careful). ~250 LOC + integration test using `tempfile`.
+- [ ] **Phase 3.1 — Scheduler trait abstract.** Tầng 1. Extract `LaunchctlClient` (`src/launchd.rs`) → `Scheduler` trait (`src/scheduler/mod.rs`) với methods `register(label, schedule, command) -> Result<RegisterReport>` / `unregister(label) -> Result<UnregisterReport>` / `print_status(label) -> Result<StatusReport>`. macOS impl move sang `src/scheduler/macos.rs` (re-export `LaunchctlClient` for backwards compat). Compile-time dispatch: `#[cfg(target_os = "macos")] use macos::MacosScheduler as PlatformScheduler;`. Zero behavior change macOS. Update `core::register::run` / `core::unregister::run` / `core::status::run` để inject `&dyn Scheduler` thay vì `&L: LaunchctlClient`. ~250 LOC refactor + 0 dep change.
 
-- [ ] **[NEW]** **Phase 1.4 — Task runner + heartbeat log.** Function `fire_task(config) -> RunResult { exit_code, stdout, stderr, duration }`. Uses `tokio::process::Command`. On completion, append 1 JSON line to `heartbeat.jsonl`: `{ts, label, exit_code, duration_ms, stdout_tail, stderr_tail}`. `run` subcommand invokes this once. Tầng 1 (defines heartbeat schema — durable contract for `status` + future Phase 2 alert). ~200 LOC.
+- [ ] **Phase 3.2 — Linux cron-tab impl.** Tầng 1. New `src/scheduler/linux.rs`. `CrontabScheduler::register`: shell `crontab -l` → parse → append managed line `<cron_expr> <self_exe> run --config <path> # advisory-cron: <label>` → pipe back qua `crontab -` (using `tokio::process::Command` + stdin write). `unregister`: same flow, filter out tag line. `print_status`: grep tag from `crontab -l`. Heartbeat: cron line redirects stdout/stderr to `~/.local/state/advisory-cron/heartbeat-cron-<label>.log` (raw capture; `advisory-cron run` itself writes heartbeat JSONL — cron-level redirect chỉ là debug safety net). INV-22 label allowlist defense-in-depth: pre-flight reject `#`, `\n`, `'`, `"`, `;`, `|`, `&`, `$`, backtick. ~300 LOC + integration test using temp HOME + mock `crontab` binary in PATH (per `runner.rs` Phase 1.4 pattern).
 
-- [ ] **[NEW]** **Phase 1.5 — Status reporter.** `status` subcommand: parse `launchctl print gui/$UID/<label>` for next fire time, read last N lines of `heartbeat.jsonl`, render to stdout (table or simple text). Handle "plist not loaded" + "no heartbeats yet" cases cleanly. Tầng 2 (no schema change, just rendering). ~100 LOC.
+- [ ] **Phase 3.3 — INVARIANTS + cross-OS CI matrix.** Tầng 1. INV-22 (crontab shell-out boundary — label allowlist 9-char blacklist enforced 2-point: pre-flight in `core::register::run` + defense-in-depth inside `CrontabScheduler::register`). INV-23 (cron expression validation — Linux accept full 5-field `M H DOM MON DOW`, macOS keep `M H * * *` daily form only per Phase 1.3 INV-11). GitHub Actions workflow `.github/workflows/ci.yml` extended với `os: [macos-latest, ubuntu-latest]` matrix; mỗi job chạy `cargo test --all`. ARCHITECTURE.md §Cron mechanism section split thành "macOS launchd" + "Linux cron-tab" subsections; new §Scheduler trait section. ~150 LOC docs + ~30 LOC INV.
 
-- [ ] **[NEW]** **Phase 1.7 — MCP server wrapper (stdio).** Subcommand `advisory-cron mcp` starts JSON-RPC 2.0 server over stdin/stdout. Exposes 5 tools 1-1 with CLI subcommands (`init`, `register`, `unregister`, `run`, `status`). Each tool's handler calls the SAME core function as its CLI counterpart (zero logic duplication — CLI layer + MCP layer both thin shells over `core::*` functions). MCP tool input schemas derived from clap args (or hand-written JSON schemas if `schemars` not pulled in). Includes README snippet for Claude Desktop `claude_desktop_config.json` registration. Architect MUST research Rust MCP SDK choice (likely `rmcp` official Anthropic crate — verify via context7 before specing). Tầng 1 (adds new dep + new public surface + may force refactor of phiếu 1.2-1.5 handlers to expose `core::*` instead of inline subcommand logic). ~300 LOC + handshake integration test.
-
-- [ ] **[NEW]** **Phase 1.6 — README + ARCHITECTURE.md.** Update README quick-start with verified commands for BOTH CLI and MCP paths. Fill in ARCHITECTURE.md "Modules" section with per-module purpose + "Cron mechanism" section explaining launchd plist lifecycle + "MCP surface" section with tool schemas + Claude Desktop config example. Tầng 2 (docs only). ~90 min (raised from 60 to budget MCP coverage). **Runs AFTER 1.7** so docs reflect final shipped surface.
+- [ ] **Phase 3.4 — README + Quick-start Linux.** Tầng 2. README quick-start có 2 OS columns (hoặc 2 sequential sections). Linux quick-start verified end-to-end trên WSL2: `crontab -l | grep advisory-cron` after register → expect exactly 1 line; `advisory-cron unregister` → expect 0 lines. MCP server section ghi nhận Claude Desktop config nguyên bản (path absolute, OS-agnostic). Status banner Phase 3 ✅. ~90 min.
 
 ---
 
-## 🎯 Next sprint: Phase 2 — Robust (Telegram alert + retry)
+## 🎯 Next sprint: Phase 4 — sos-kit promotion + Linux packaging (DEFERRED)
 
-> **Trigger:** Phase 1 dogfood xanh 3 ngày liên tiếp.
-> **Theme:** Resilience — fail-loud surface to Sếp's phone + retry transient errors.
-
-- [ ] **Phase 2.1** — Telegram bot webhook POST on fail. Config `[alert.telegram]` block (bot_token, chat_id). Test with mock HTTP server. **Pre-req: ✅ secrets ready** at `~/.advisory-cron-secrets.env` chmod 600 (bot `@chiha_alert_bot`, chat_id `1184530337`, end-to-end test confirmed 2026-05-27 message_id=21).
-- [ ] **Phase 2.2** — Retry policy. Config `[retry]` block (max_attempts, backoff_secs). Re-fire on transient failure (exit code 1-127 retryable; SIGTERM/SIGKILL not).
-- [ ] **Phase 2.3** — State recovery. Crash-safe heartbeat write (write + fsync + rename). Recovery on next fire if previous run interrupted mid-write.
+> **Trigger:** Phase 3 dogfood xanh + Sếp confirm muốn share advisory-cron qua sos-kit recipes (2-3 repos khác).
+> **Theme:** Distribution — copy binary vào `~/sos-kit/bin/`, bootstrap hook for new repos, `.deb` / `.rpm` Linux packaging optional.
 
 ---
 
 ## 🌊 Future waves (cam kết level low)
 
-- **Phase 3** — Linux support (systemd timer + cron-tab generation).
-- **Phase 4** — sos-kit promotion (copy binary, bootstrap hook for new repos, add to `~/sos-kit/recipes/automation/`).
-- **Phase 5** — `cargo publish` to crates.io (optional, if API stable + Sếp wants external users).
+- **Phase 3.5** — Linux systemd timer impl (pick chỉ nếu Phase 3 dogfood lộ nhu cầu journald log / sandboxing / RandomizedDelaySec). Sẽ extend `Scheduler` trait existing — không refactor lại.
+- **Phase 5** — Windows native (Task Scheduler / schtasks.exe XML). Pick chỉ khi Sếp chính thức dev/dogfood trên Windows host (KHÔNG phải WSL2). Sẽ extend `Scheduler` trait existing.
+- **Phase 6** — `cargo publish` to crates.io (optional, if API stable + Sếp wants external users).
 
 ---
 
@@ -64,8 +71,21 @@
 
 ## ✅ Recently shipped
 
-- **2026-05-27 — Sprint Phase 1 + Phase 2 (P001-P010) shipped.** 10 phiếu over the sprint. CLI scaffold → config schema → launchd plist → task runner + heartbeat → status reporter → MCP server wrapper → README/ARCHITECTURE polish → Telegram alert → retry policy → crash-safe heartbeat. 141 tests passing, 22 modules, 21 INVs, single-binary ≤7MB. See CHANGELOG.md sprint summary.
-- **2026-05-27 — P011: Sprint debt cleanup (Tầng 2).** INV-12 label sanitization 2-point enforcement confirmed in place + 3 named attack-class tests added in `core::register::run`; `.git/hooks/pre-commit` DISCOVERIES grep aligned with CLAUDE.md doctrine list-item format (legacy H2 still accepted for P001-P010 backwards-compat). Item 3 (`fire_task` no process timeout) stays deferred in Open backlog.
+- **2026-05-27 — Sprint Phase 1 + Phase 2 (P001-P011) shipped (11 phiếu total).** See CHANGELOG.md 2026-05-27 sprint summary table for per-phiếu detail. Cumulative: 144 tests, 22 modules, 21 INVs, ~3.9MB release binary.
+  - **Phase 1 — MVP launchd + MCP (7 phiếu):**
+    - P001 — Phase 1.1 — CLI scaffold (5 subcommand stubs, clap derive)
+    - P002 — Phase 1.2 — Config schema (TOML + serde, 3 blocks)
+    - P003 — Phase 1.3 — launchd plist + `register`/`unregister`
+    - P004 — Phase 1.4 — Task runner + heartbeat JSONL
+    - P005 — Phase 1.5 — Status reporter (`launchctl print` parse + heartbeat tail)
+    - P006 — Phase 1.7 — MCP server (stdio, rmcp SDK) + `core::*` extraction (CLI/MCP layering)
+    - P007 — Phase 1.6 — README + ARCHITECTURE post-ship polish
+  - **Phase 2 — Robust (3 phiếu):**
+    - P008 — Phase 2.1 — Telegram alert on task failure (INV-19 outbound HTTP boundary)
+    - P009 — Phase 2.2 — Retry policy (`is_retryable` + backoff loop, single-alert-per-invocation INV-20)
+    - P010 — Phase 2.3 — Crash-safe heartbeat (temp+fsync+rename atomic protocol INV-21)
+  - **Sprint debt cleanup (1 phiếu):**
+    - P011 — Tầng 2 — INV-12 label sanitization 2-point enforcement tests + DISCOVERIES hook regex align
 
 ---
 
