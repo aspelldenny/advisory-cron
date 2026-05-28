@@ -20,7 +20,7 @@ cd advisory-cron
 cargo install --path .
 ```
 
-## Quick start (CLI)
+## Quick start — macOS (launchd)
 
 ```bash
 # 1. Write default config to ~/.config/advisory-cron/config.toml
@@ -41,6 +41,39 @@ advisory-cron status --label advisory-scan-daily
 # 6. Unregister when done testing
 advisory-cron unregister --label advisory-scan-daily
 ```
+
+## Quick start — Linux (cron-tab)
+
+```bash
+# 1. Write default config to ~/.config/advisory-cron/config.toml
+advisory-cron init
+
+# 2. Register a cron-tab line that fires daily at 09:00
+advisory-cron register --label advisory-scan-daily --schedule "0 9 * * *"
+
+# 3. Verify the cron-tab line is present (Sub-mechanism A — trigger gap check)
+crontab -l | grep "# advisory-cron:"
+# Expected: 0 9 * * * /home/<YOU>/.cargo/bin/advisory-cron run # advisory-cron: advisory-scan-daily
+# Note: the binary path in the crontab entry mirrors the path of the binary that ran `register`.
+# If you used `cargo install --path .`, this will be ~/.cargo/bin/advisory-cron.
+
+# 4. Fire the configured task immediately (one-shot test)
+advisory-cron run
+
+# 5. Show cron schedule + last 5 heartbeats
+advisory-cron status --label advisory-scan-daily
+# Note: on Linux Phase 3, `next_fire` renders N/A — full cron-expression parsing
+# deferred to Phase 3.5+ (INV-23). Schedule is still active; verify via `crontab -l`.
+
+# 6. Unregister when done testing
+advisory-cron unregister --label advisory-scan-daily
+
+# 7. Verify the cron-tab line is removed
+crontab -l | grep "# advisory-cron:"
+# Expected: (no output, exit 1) — other user crontab lines preserved
+```
+
+**Note:** `advisory-cron register` parses `--schedule` as a 5-field cron expression but currently only accepts the daily form `M H * * *` (parity with macOS `StartCalendarInterval`). Full 5-field cron support is deferred to Phase 3.5+ per INV-23. See [`docs/security/INVARIANTS.md`](docs/security/INVARIANTS.md) for the formal invariant.
 
 ## MCP server (Claude Desktop / Claude Code)
 
@@ -63,7 +96,11 @@ Add the following to `~/Library/Application Support/Claude/claude_desktop_config
 }
 ```
 
-Replace `<YOUR_USERNAME>` with your macOS username. Confirm binary path with `which advisory-cron`.
+Replace `<YOUR_USERNAME>` with your username and adjust the path for your OS:
+- **macOS:** `/Users/<YOUR_USERNAME>/.cargo/bin/advisory-cron` + config at `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Linux:** Claude Desktop / Claude Code MCP client config path is OS-specific — consult your client documentation. Binary path: `/home/<YOUR_USERNAME>/.cargo/bin/advisory-cron`
+
+Confirm binary path with `which advisory-cron`.
 
 **Step 3 — Restart Claude Desktop.** The following tools become available:
 
@@ -158,7 +195,7 @@ No config change required — Phase 2.3 is fully transparent. Existing heartbeat
 
 ## Status
 
-Phase 1 + Phase 2 COMPLETE (all 10 phiếu shipped). Track progress in [`docs/BACKLOG.md`](docs/BACKLOG.md).
+Phase 1 + Phase 2 + Phase 3 COMPLETE — macOS launchd + Linux cron-tab dual-platform shipped. Single Rust binary (~5 MB), 23 invariants, cross-OS CI matrix (macos-latest + ubuntu-latest). Track progress in [`docs/BACKLOG.md`](docs/BACKLOG.md).
 
 ## License
 

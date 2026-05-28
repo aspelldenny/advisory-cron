@@ -6,6 +6,34 @@
 
 ---
 
+## 2026-05-28 — P015: Phase 3.4 — README Linux quick-start (SPRINT CLOSE)
+
+**Phiếu:** P015 (Tầng 2 — README.md only)
+
+**Scope:** Final phiếu of Phase 3 sprint. Updated `README.md` to add Linux user path and bump Phase 3 status banner.
+
+- **2-OS Quick start sections:** Renamed `## Quick start (CLI)` → `## Quick start — macOS (launchd)` (verbatim preserved). Added new `## Quick start — Linux (cron-tab)` section with 7-step flow (register → verify crontab → run → status → unregister → verify cleanup), Sub-mechanism A trigger gap check, and explicit note that `next_fire` renders N/A on Linux Phase 3 (INV-23 deferred).
+- **Linux dogfood smoke verified end-to-end on WSL2:** All 5 smoke steps pass — `init` exit 0, `register` exit 0 + 1 tagged crontab line, `status --json` `plist_loaded: true` / `next_fire: null`, `unregister` exit 0 + 0 tagged lines, diff to pre-smoke crontab clean.
+- **MCP OS-agnostic note:** Replaced macOS-only `Replace <YOUR_USERNAME>...` line with 2-bullet OS split (macOS path + Linux OS-agnostic note per Anchor #9 fallback — Linux Claude Desktop config path not verifiable on this box; prose defers to client docs).
+- **Phase 3 COMPLETE status banner:** Bumped to "Phase 1 + Phase 2 + Phase 3 COMPLETE — macOS launchd + Linux cron-tab dual-platform shipped. Single Rust binary (~5 MB), 23 invariants, cross-OS CI matrix (macos-latest + ubuntu-latest)."
+
+**Phase 3 sprint summary (P012–P015):**
+
+| Phiếu | Title | Shipped |
+|-------|-------|---------|
+| P012 | Scheduler trait extract (abstract layer) | 2026-05-28 |
+| P013 | Linux cron-tab impl (sync stdlib, V2) | 2026-05-28 |
+| P014 | INV-22/23 + cross-OS CI matrix | 2026-05-28 |
+| P015 | README 2-OS quick-start (sprint close) | 2026-05-28 |
+
+**Acceptance criteria closure (BACKLOG.md Phase 3):** All 4 phiếu shipped. README quick-start has 2 OS paths with `crontab -l | grep advisory-cron` Sub-mechanism A verification. Linux dogfood smoke verified WSL2 end-to-end. Sprint close — Phase 3 COMPLETE.
+
+**Binary size (WSL2):** 4.8 MB release build. **INV total:** 23. **Test count (Linux):** 143 (macOS-gated tests skip on Linux; CI matrix runs all on both OS).
+
+**No code change, no `Cargo.toml` change, no dep change, no CLI / MCP / config schema change.**
+
+---
+
 ## 2026-05-28 — P014: Phase 3.3 — INV-22 + INV-23 formal entries + cross-OS CI matrix
 
 **Phiếu:** P014 (Tầng 1 — docs/security/INVARIANTS.md doctrine surface + new GitHub Actions workflow file)

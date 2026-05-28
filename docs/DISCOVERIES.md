@@ -6,6 +6,8 @@
 
 ---
 
+- 2026-05-28 P015: README Linux quick-start (Phase 3.4 — sprint close) — 2-OS sections, Linux dogfood smoke verified WSL2 end-to-end, Anchor #8 current_exe() path behavior documented, Anchor #9 OS-agnostic fallback prose, Phase 3 SPRINT CLOSE → see docs/discoveries/P015.md
+
 - 2026-05-28 P014: INV-22 (crontab shell-out boundary 5 sub-rules) + INV-23 (daily-form cron invariant both platforms + both parsers) appended to INVARIANTS.md (21→23); ci.yml 2-OS matrix created from scratch; Worker CHALLENGE Turn 1 caught 4-location is_valid_label drift + missing parse_simple_cron trigger keyword + false NoopScheduler claim in ci.yml comment → all 3 accepted in V2; first CI run observation pending → see docs/discoveries/P014.md
 
 - 2026-05-28 P013: Linux cron-tab sync stdlib impl shipped; V2 pivot saved nested-runtime panic + missing io-util feature (Worker CHALLENGE Turn 1 catch); mock crontab TempDir+PATH pattern for integration tests; `working_dir` still dead on Linux (`RegisterIntent` allow(dead_code) stays); dogfood smoke WSL2 verified register/unregister/idempotency/invalid-label all clean → see docs/discoveries/P013.md
