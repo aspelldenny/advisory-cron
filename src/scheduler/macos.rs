@@ -287,14 +287,6 @@ fn current_uid() -> Result<u32> {
         .with_context(|| format!("failed to parse UID from `id -u` output: {s:?}"))
 }
 
-/// Inline INV-12 check — keeps validation local to scheduler::macos defense-in-depth.
-fn is_valid_label_inline(label: &str) -> bool {
-    !label.is_empty()
-        && label
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-}
-
 /// Adapter — bridges Phase 1 `generate_plist(config, label, self_exe)` to Phase 3 intent shape.
 /// Builds a synthetic `Config` for the plist generator (which currently reads `config.task.working_dir`
 /// + `config.schedule`). Keeps the move strictly mechanical — no rewrite of `generate_plist` body.
@@ -353,7 +345,7 @@ impl Scheduler for MacosScheduler {
 
     fn unregister(&self, label: &str) -> Result<UnregisterReport> {
         // Defense-in-depth label validation (INV-12).
-        if !is_valid_label_inline(label) {
+        if !super::is_valid_label(label) {
             anyhow::bail!("invalid label {label:?} — must be ASCII alphanumeric + '-' + '_'");
         }
         use crate::core::config_path::home_dir;

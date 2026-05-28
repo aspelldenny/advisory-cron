@@ -55,6 +55,23 @@ pub struct SchedulerStatus {
     pub raw_descriptor: Option<String>,
 }
 
+/// Cross-OS label allowlist — ASCII alphanumeric + `-` + `_`, non-empty.
+///
+/// Used by:
+/// - `scheduler::macos::MacosScheduler::unregister` (INV-12 defense-in-depth point 2 — same allowlist as `generate_plist`).
+/// - `scheduler::linux::CrontabScheduler::{register, unregister, status}` (INV-22 defense-in-depth point 2 — pre-flight at `core::*` is point 1).
+///
+/// **Why a tight allowlist instead of a metachar blacklist:** the allowlist excludes ALL whitespace,
+/// path separators (`.`, `/`, `~`), shell meta-chars (`$`, `` ` ``, `&`, `;`, `|`, `#`), quote chars (`'`, `"`),
+/// AND newlines — covers both launchd domain-target injection (INV-10/12/17) AND crontab tag-line injection
+/// (INV-22) without enumeration. Single source of truth; less to forget.
+pub fn is_valid_label(label: &str) -> bool {
+    !label.is_empty()
+        && label
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 /// Cross-OS scheduling abstraction. macOS = launchd; Linux = crontab.
 pub trait Scheduler {
     /// Register a recurring task. Idempotent on re-register (overwrites existing registration).
@@ -75,6 +92,40 @@ pub use linux::CrontabScheduler as PlatformScheduler;
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 compile_error!("advisory-cron Phase 3 supports macOS + Linux only");
+
+#[cfg(test)]
+mod tests {
+    use super::is_valid_label;
+
+    #[test]
+    fn accepts_alphanumeric_hyphen_underscore() {
+        assert!(is_valid_label("advisory-scan_daily"));
+        assert!(is_valid_label("foo"));
+        assert!(is_valid_label("F00"));
+        assert!(is_valid_label("a-b_c-d"));
+    }
+
+    #[test]
+    fn rejects_empty() {
+        assert!(!is_valid_label(""));
+    }
+
+    #[test]
+    fn rejects_shell_metacharacters() {
+        for label in [
+            "foo;bar", "foo$bar", "foo|bar", "foo&bar", "foo`bar`", "foo'bar", "foo\"bar",
+            "foo#bar", "foo bar", "foo\nbar", "foo/bar", "foo.bar", "foo~bar", "../etc",
+        ] {
+            assert!(!is_valid_label(label), "expected rejection for {label:?}");
+        }
+    }
+
+    #[test]
+    fn rejects_unicode() {
+        assert!(!is_valid_label("café"));
+        assert!(!is_valid_label("日本語"));
+    }
+}
 
 // ---- NoopScheduler (test impl — replaces NoopLaunchctl) ----
 
