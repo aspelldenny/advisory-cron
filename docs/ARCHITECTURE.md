@@ -43,15 +43,18 @@ Planned module layout for Phase 1. Worker may adjust per phiếu's spec (Archite
 | `src/core/mod.rs` | Re-exports `config_path`, `init`, `register`, `unregister`, `run`, `status` sub-modules. Zero CLI/MCP coupling. | 1.7 ✅ |
 | `src/core/config_path.rs` | `home_dir() -> Result<PathBuf>` and `default_config_path() -> Result<PathBuf>` — shared `$HOME` helpers used by all `core::*::run` fns. Bails if `$HOME` is unset or empty. | 1.7 ✅ |
 | `src/core/init.rs` | `run(InitArgs) -> Result<InitOutput>` — write default config. Resolves home via `home_dir()` internally. | 1.7 ✅ |
-| `src/core/register.rs` | `run(RegisterArgs, &L: LaunchctlClient) -> Result<RegisterOutput>` — generate plist + bootstrap. Resolves home + `launch_agents_dir` + `self_exe` internally. | 1.7 ✅ |
-| `src/core/unregister.rs` | `run(UnregisterArgs, &L: LaunchctlClient) -> Result<UnregisterOutput>` — bootout + remove plist. Idempotent. Resolves home internally. | 1.7 ✅ |
+| `src/core/register.rs` | `run(RegisterArgs, &S: Scheduler) -> Result<RegisterOutput>` — build `RegisterIntent` + delegate to `Scheduler::register`. Resolves home + `self_exe` internally; plist generation moved into `MacosScheduler`. Inline `parse_daily_cron` (domain logic, not scheduler logic). | 1.7 ✅ → 3.1 ✅ |
+| `src/core/unregister.rs` | `run(UnregisterArgs, &S: Scheduler) -> Result<UnregisterOutput>` — delegate to `Scheduler::unregister`. Idempotent. `UnregisterOutput` keeps `plist_existed`+`was_loaded` populated from `was_registered` (JSON schema stable). | 1.7 ✅ → 3.1 ✅ |
 | `src/core/run.rs` | `async run(RunArgs) -> Result<RunOutput>` — retry loop wraps `runner::fire_task` (Phase 2.2); 1 heartbeat per attempt; alert outside loop (1 max per invocation). Full runner logic extracted from `cli/run.rs`. | 1.7 ✅ + 2.2 retry ✅ |
-| `src/core/status.rs` | `run(StatusArgs, &L: LaunchctlClient) -> Result<StatusReport>` — launchd query + heartbeat read. `parse_next_fire` moved here from `cli/status.rs`. `StatusReport` pub (shared by CLI render + MCP serialize). | 1.7 ✅ |
+| `src/core/status.rs` | `run(StatusArgs, &S: Scheduler) -> Result<StatusReport>` — scheduler query + heartbeat read. `parse_next_fire` parses macOS descriptor format via `SchedulerStatus.raw_descriptor`. `StatusReport.plist_loaded` field name preserved (JSON schema stability). | 1.7 ✅ → 3.1 ✅ |
 | `src/mcp/mod.rs` | Re-exports `server` and `tools` sub-modules. | 1.7 ✅ |
 | `src/mcp/server.rs` | `serve_stdio() -> Result<()>` — rmcp `ServerHandler::serve(stdio()).await` + `.waiting().await`. Converts SDK errors to `anyhow::Error`. | 1.7 ✅ |
 | `src/mcp/tools.rs` | `AdvisoryCronHandler` implementing rmcp `ServerHandler`. 5 tools with hand-written JSON schemas (Decision 3). INV-18 validation (`validate_label`, `validate_config_path`) at MCP boundary before `core::*` call. Tool errors as `is_error=true` results. | 1.7 ✅ |
 | `src/config.rs` | TOML config schema (serde-derive). Validation on load. | 1.2 ✅ |
-| `src/launchd.rs` | Plist XML generation + `launchctl` shell invocation wrappers. macOS-only. `LaunchctlClient` trait + `RealLaunchctl`/`NoopLaunchctl` impls + `current_uid()` helper. Extended P005: `LaunchctlClient::print` method + `LaunchctlPrintOutput` struct (status reporter). `parse_next_fire` moved to `src/core/status.rs` in P006. | 1.3 ✅ → 1.5 ✅ |
+| ~~`src/launchd.rs`~~ | **Deleted Phase 3.1 (P012).** Content moved to `src/scheduler/macos.rs`. | ~~1.3 ✅ → 1.5 ✅~~ DELETED |
+| `src/scheduler/mod.rs` | `Scheduler` trait + `RegisterIntent`/`RegisterReport`/`UnregisterReport`/`SchedulerStatus` types. `PlatformScheduler` compile-time alias. `NoopScheduler` (test impl). Phase 3.1 (P012). | 3.1 ✅ |
+| `src/scheduler/macos.rs` | `MacosScheduler` implements `Scheduler` for macOS (launchd). Plist XML generation, `launchctl` shell-out, INV-10/11/12/13/17 enforcement all INSIDE this module. `RealLaunchctl` + `LaunchctlClient` private (file-internal). Gated `#[cfg(target_os = "macos")]`. Phase 3.1 (P012). | 3.1 ✅ |
+| `src/scheduler/linux.rs` | `CrontabScheduler` stub: `impl Scheduler` bails `"Phase 3.2 (P013) chưa ship"` for every method. Gated `#[cfg(target_os = "linux")]`. Real implementation lands P013. Phase 3.1 (P012). | 3.1 ✅ (stub) |
 | `src/runner.rs` | `tokio::process::Command` task spawn + capture stdout/stderr/exit. `RunResult` struct. | 1.4 ✅ |
 | `src/heartbeat.rs` | JSONL atomic append (temp+fsync+rename per INV-21) + read-last-N with partial-last-line tolerance. `HeartbeatRecord` struct (durable schema, unchanged since P004). `tail_utf8` helper. | 1.4 ✅ + 2.3 crash-safe ✅ |
 | `src/alert.rs` | `TelegramAlert::send_with_base` outbound POST to Telegram Bot API. Best-effort (alert fail ≠ task fail). Env-free module — the API base test-seam env var is read at the call site in `core::run::run`, NOT here. INV-19 boundary (10s timeout double-guard: reqwest client + `tokio::time::timeout`). `format_failure_message` centralises message format. | 2.1 ✅ |
@@ -60,7 +63,22 @@ Planned module layout for Phase 1. Worker may adjust per phiếu's spec (Archite
 
 **Layering invariant (shipped Phase 1.7):** `core::*` knows nothing about CLI or MCP. `cli::*` and `mcp::*` are both thin adapters. A single code path = single behavior — `register` from CLI and `register` from MCP MUST produce identical plist + identical side effects.
 
-**V2 internal-resolution pattern (P006):** Every `core::*::run` fn resolves its own env dependencies (`$HOME`, `LaunchAgents` dir, `current_exe`) internally via stdlib. ONLY `&L: LaunchctlClient` is injected for testability (prod = `RealLaunchctl`, test = `NoopLaunchctl`). No config-path or home-dir threading through call stacks.
+**V2 internal-resolution pattern (P006):** Every `core::*::run` fn resolves its own env dependencies (`$HOME`, `LaunchAgents` dir, `current_exe`) internally via stdlib. ONLY `&S: Scheduler` is injected for testability (prod = `PlatformScheduler`, test = `NoopScheduler`). No config-path or home-dir threading through call stacks.
+
+### Scheduler trait (Phase 3.1 — P012)
+
+`src/scheduler/mod.rs` exposes the `Scheduler` trait with 3 methods: `register`, `unregister`, `status`. All carry **high-level intent** (no OS-specific concepts leak into the trait surface):
+
+- `register(&self, intent: &RegisterIntent) -> Result<RegisterReport>` — plist-vs-crontab hidden inside impl.
+- `unregister(&self, label: &str) -> Result<UnregisterReport>` — idempotent.
+- `status(&self, label: &str) -> Result<SchedulerStatus>` — raw descriptor for `parse_next_fire` parsing.
+
+**Compile-time dispatch** via `PlatformScheduler` type alias:
+- macOS: `pub use macos::MacosScheduler as PlatformScheduler;`
+- Linux: `pub use linux::CrontabScheduler as PlatformScheduler;`
+- Other OS: `compile_error!("Phase 3 supports macOS + Linux only")`
+
+Phase 3.2 (P013) fills `CrontabScheduler` with real crontab logic. P012 ships as a compilation stub.
 
 ---
 
@@ -213,7 +231,7 @@ Then `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.advisorycron.<labe
 - `unregister` `launchctl bootout gui/$UID/com.advisorycron.<label>` + removes plist file. **Idempotent:** succeeds (exit 0) if label not loaded or plist already absent.
 - `status` `launchctl print gui/$UID/com.advisorycron.<label>` parses output for next fire time. **P005 Discovery:** macOS 15 (Darwin 25.5.0) exposes NO "next fire" timestamp key — only the configured `descriptor = { "Hour" => N "Minute" => M }`. `parse_next_fire` extracts these to render "daily at HH:MM" (configured recurrence). Future macOS versions without this key → renders "unknown (launchctl format not recognized)".
 
-**UID resolution:** `launchctl` requires numeric UID (not `$UID` shell expansion). `src/launchd.rs::current_uid()` shells out `id -u` (zero-unsafe, zero-dep — Heads-up #5 Option B resolution).
+**UID resolution:** `launchctl` requires numeric UID (not `$UID` shell expansion). `src/scheduler/macos.rs::current_uid()` (private) shells out `id -u` (zero-unsafe, zero-dep — Heads-up #5 Option B resolution).
 
 **Bootout idempotency note:** empirically verified (Anchor #17) — when label not loaded, `launchctl bootout` exits 3 with stdout `"Boot-out failed: 3: No such process"`. advisory-cron treats ANY non-zero launchctl exit as warn-continue (no substring branching).
 
@@ -355,6 +373,9 @@ Error categories (anyhow context chain):
 
 - ✅ **Phase 1** — Code COMPLETE (all 7 sub-phases shipped). Awaiting Sếp dogfood 3 ngày để close sprint per BACKLOG acceptance. Phase 1.1 shipped: CLI scaffold (5 subcommand stubs, clap derive). Phase 1.2 shipped: config schema (TOML + serde, `advisory-cron init` wired). Phase 1.3 shipped: launchd plist generator + `register`/`unregister` handlers (newtype dispatch, LaunchctlClient trait, idempotent unregister, zero new dep). Phase 1.4 shipped: task runner + heartbeat JSONL (`src/runner.rs` + `src/heartbeat.rs` + `run --config` flag wired; `serde_json` explicit dep; `task.label` optional config field). Phase 1.5 shipped: status reporter (`launchctl print` parsing of `descriptor` Hour/Minute → "daily at HH:MM"; heartbeat read-render; new CLI flags `--label / --config / --json / --last`; `LaunchctlClient` trait extended with `print`; INV-17 appended for `launchctl print` shell-out boundary). **Discovery (P005):** macOS 15 launchctl does NOT expose a "next fire" timestamp for `StartCalendarInterval` jobs — only configured recurrence via `descriptor = { "Hour" => N "Minute" => M }`. Acceptance gate satisfied via configured-recurrence rendering. Phase 1.7 shipped: MCP server wrapper (rmcp 1.7.0 stdio; `core::*` extraction for dual-surface parity; 5 tools; INV-18; 94 tests pass). Phase 1.6 (README + ARCHITECTURE docs polish) shipped per P007.
 - ✅ **Phase 2** — COMPLETE. Phase 2.1 (Telegram alert) shipped per P008. Phase 2.2 (retry policy) shipped per P009 (`is_retryable` private fn + retry loop in `core/run.rs`; 1 heartbeat per attempt schema preserved; alert moved OUTSIDE loop per INV-20 single-alert-per-invocation; `[retry]` opt-in config block). Phase 2.3 (state recovery) shipped per P010 (heartbeat `append` refactored to temp+fsync+rename atomic protocol; `read_last_n` tolerates corrupt last line; INV-21 added; no schema change). **All 10 phiếu of the sprint shipped — sprint closes 2026-05-27.**
-- ⏸️ **Phase 3** — Deferred. Trigger: Phase 2 ship complete (now), need Linux support, OR Sếp picks from "Open backlog" debt items.
+- 🚧 **Phase 3** — In progress.
+  - ✅ **Phase 3.1** (P012): `Scheduler` trait extracted. `src/launchd.rs` → `src/scheduler/{mod,macos,linux}.rs`. `PlatformScheduler` compile-time alias. macOS behavior unchanged; Linux stub compiles (`bail!` P013). Linux WSL2 build verified: 4.7MB binary, zero warnings.
+  - ⏸️ **Phase 3.2** (P013): `CrontabScheduler` real implementation (crontab `register`/`unregister`/`status`). INV-22/23 (label allowlist + cron expression validation for crontab). Deferred.
+  - ⏸️ **Phase 3.3** (P014): CI matrix (macOS + Linux parallel jobs). Deferred.
 
 *(Worker updates this section at end of each phase EXECUTE — Tầng 2 status text.)*

@@ -1,9 +1,12 @@
 //! Phase 1.3 acceptance: register/unregister flow with TempDir HOME override + binary spawn.
 //!
-//! CRITICAL: integration tests spawn the compiled binary, so they CANNOT inject NoopLaunchctl
-//! across the CLI boundary. They exercise the END-TO-END flow with real RealLaunchctl invocation.
+//! CRITICAL: integration tests spawn the compiled binary, so they CANNOT inject NoopScheduler
+//! across the CLI boundary. They exercise the END-TO-END flow with real MacosScheduler invocation.
 //! Pollution mitigation: unique label suffix per test (PID-based) + best-effort tearDown cleanup.
-//! Unit tests inside src/launchd.rs #[cfg(test)] mod are the only place NoopLaunchctl is wired.
+//! Unit tests inside src/scheduler/macos.rs #[cfg(test)] mod are the only place NoopScheduler is wired.
+//!
+//! Phase 3.1 (P012): tests that invoke launchctl / write plist files are gated
+//! `#[cfg(target_os = "macos")]`. Linux runs only pre-flight validation tests.
 
 use std::path::Path;
 use tempfile::TempDir;
@@ -36,6 +39,7 @@ log_path = "{}/.local/state/advisory-cron/heartbeat.jsonl"
     config_path
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn register_writes_plist_to_launch_agents_dir() {
     let home = TempDir::new().unwrap();
@@ -78,6 +82,7 @@ fn register_writes_plist_to_launch_agents_dir() {
     let _ = std::fs::remove_file(&plist_path);
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn register_with_cron_simple_form_works() {
     let home = TempDir::new().unwrap();
@@ -157,6 +162,7 @@ fn register_missing_config_exits_2() {
     assert_eq!(out.status.code(), Some(2));
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn unregister_nonexistent_label_exits_0_idempotent() {
     let home = TempDir::new().unwrap();
@@ -184,6 +190,7 @@ fn unregister_nonexistent_label_exits_0_idempotent() {
     );
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn register_then_unregister_round_trip() {
     let home = TempDir::new().unwrap();
@@ -221,7 +228,8 @@ fn register_then_unregister_round_trip() {
     );
 }
 
-/// Best-effort UID helper for cleanup (mirrors src/launchd.rs::current_uid logic).
+/// Best-effort UID helper for cleanup (mirrors scheduler::macos::current_uid logic).
+#[cfg(target_os = "macos")]
 fn uid() -> u32 {
     let out = std::process::Command::new("id").arg("-u").output().unwrap();
     String::from_utf8_lossy(&out.stdout).trim().parse().unwrap()

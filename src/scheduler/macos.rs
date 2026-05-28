@@ -1,29 +1,35 @@
-//! Phase 1.3 — launchd plist generation + `launchctl` bootstrap/bootout wrappers.
+//! Phase 3.1 — macOS scheduler: launchd plist generation + launchctl wrappers.
 //!
-//! macOS-specific. Linux deferred to Phase 3 (systemd timer / cron-tab).
+//! Content moved verbatim from Phase 1.3 `src/launchd.rs`. `MacosScheduler` wraps
+//! the existing `RealLaunchctl` (now private) and plist generation logic.
 //!
-//! Public surface:
-//! - `generate_plist(config, label, self_exe)` — pure XML string builder
-//! - `plist_path_for(label, launch_agents_dir)` — compose absolute plist path
-//! - `default_launch_agents_dir(home)` — `<home>/Library/LaunchAgents`
-//! - `LaunchctlClient` trait — `bootstrap`/`bootout` abstraction
-//! - `RealLaunchctl` — production impl using `std::process::Command`
-//! - `NoopLaunchctl` — test impl recording calls (pub; integration tests may import)
-//! - `current_uid()` — POSIX `id -u` shell-out (zero-unsafe, zero-dep)
+//! Public surface (re-exported via `scheduler::*`):
+//! - `MacosScheduler` — implements `Scheduler` trait; production impl.
+//!   Internally uses `RealLaunchctl` + `generate_plist`.
+//!
+//! Internal (pub(super) or private):
+//! - `generate_plist`, `plist_path_for`, `default_launch_agents_dir`, `xml_escape`
+//! - `RealLaunchctl`, `LaunchctlPrintOutput`, `LaunchctlClient`
+//! - `current_uid`, `parse_simple_cron`
 
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::{fs, io};
 
 use crate::config::{Config, ScheduleConfig};
 
+use super::{RegisterIntent, RegisterReport, Scheduler, SchedulerStatus, UnregisterReport};
+
+// ---- Path helpers (pub(super) for tests in parent mod if needed) ----
+
 /// Compose absolute plist path: `<launch_agents_dir>/com.advisorycron.<label>.plist`.
-pub fn plist_path_for(label: &str, launch_agents_dir: &Path) -> PathBuf {
+pub(super) fn plist_path_for(label: &str, launch_agents_dir: &Path) -> PathBuf {
     launch_agents_dir.join(format!("com.advisorycron.{label}.plist"))
 }
 
 /// Default user LaunchAgents directory: `<home>/Library/LaunchAgents/`.
-pub fn default_launch_agents_dir(home: &Path) -> PathBuf {
+pub(super) fn default_launch_agents_dir(home: &Path) -> PathBuf {
     home.join("Library/LaunchAgents")
 }
 
@@ -38,7 +44,7 @@ pub fn default_launch_agents_dir(home: &Path) -> PathBuf {
 ///
 /// Errors: if `config.schedule` is `Cron` variant with an expression not parseable as
 /// `"M H * * *"` form (launchd has no native crontab support — only `StartCalendarInterval`).
-pub fn generate_plist(config: &Config, label: &str, self_exe: &Path) -> Result<String> {
+fn generate_plist(config: &Config, label: &str, self_exe: &Path) -> Result<String> {
     let (hour, minute) = match &config.schedule {
         ScheduleConfig::Calendar { hour, minute } => (*hour, *minute),
         ScheduleConfig::Cron { cron } => parse_simple_cron(cron)?,
@@ -149,41 +155,27 @@ fn xml_escape(s: &str) -> String {
 }
 
 /// Output of `launchctl print gui/<uid>/com.advisorycron.<label>`.
-/// Returned by `LaunchctlClient::print`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct LaunchctlPrintOutput {
+/// Returned by `RealLaunchctl::print`. Internal to this module.
+struct LaunchctlPrintOutput {
     /// Full stdout captured from launchctl. Caller parses for "Hour"/"Minute"
     /// keys inside the `descriptor` block (V2 spec — macOS 15 launchctl does
     /// not expose a "next fire" timestamp, only the configured recurrence).
-    pub raw_stdout: String,
+    raw_stdout: String,
     /// True when stderr indicated "Could not find service" — label is not currently loaded.
     /// Caller renders "not loaded" status instead of attempting to parse `raw_stdout`.
-    pub not_loaded: bool,
+    not_loaded: bool,
 }
 
-/// Abstraction over `launchctl` shell-out — production uses real launchctl, tests inject NoopLaunchctl.
-pub trait LaunchctlClient {
-    /// `launchctl bootstrap gui/<uid> <plist_path>`.
-    // existing methods — DO NOT change signatures (V2 fix: bootstrap is 1-arg)
-    fn bootstrap(&self, plist_path: &Path) -> Result<()>; // 1 arg — domain computed internally via current_uid() per P003 V2
-
-    /// `launchctl bootout gui/<uid>/<label>`.
-    ///
-    /// Returns Ok even if launchctl reports "not loaded" — caller decides idempotency.
-    /// Errors only on hard launchctl failures (binary missing, spawn fail).
-    /// Worker MUST capture stdout+stderr in returned error for diagnostics.
-    fn bootout(&self, label: &str) -> Result<()>; // unchanged from P003
-
-    /// Query launchd for the loaded job's status. Returns raw stdout for the caller
-    /// to parse (parse format is system-version dependent — see P005 V2 parse_next_fire).
-    /// `label` is the bare label (no `com.advisorycron.` prefix and no `gui/<uid>/`).
-    /// Per INV-12, `label` MUST be ASCII alphanumeric + `-` + `_` only (caller validates;
-    /// implementation re-validates as defense-in-depth).
+/// Internal trait over `launchctl` shell-out — private to this module.
+/// `MacosScheduler` calls `RealLaunchctl` directly; tests inside this file use `NoopLaunchctl`.
+trait LaunchctlClient {
+    fn bootstrap(&self, plist_path: &Path) -> Result<()>;
+    fn bootout(&self, label: &str) -> Result<()>;
     fn print(&self, label: &str) -> Result<LaunchctlPrintOutput>;
 }
 
-/// Production impl — shells out real `launchctl`.
-pub struct RealLaunchctl;
+/// Production impl — shells out real `launchctl`. Private to this module.
+struct RealLaunchctl;
 
 impl LaunchctlClient for RealLaunchctl {
     fn bootstrap(&self, plist_path: &Path) -> Result<()> {
@@ -217,7 +209,7 @@ impl LaunchctlClient for RealLaunchctl {
         if !out.status.success() {
             // V2 note (Anchor #17 empirical): expected stdout when label-not-loaded is
             // "Boot-out failed: 3: No such process" (exit=3). Do NOT branch behavior on
-            // substring — caller (unregister::run) treats any Err as warn-continue.
+            // substring — caller (unregister) treats any Err as warn-continue.
             bail!(
                 "launchctl bootout failed (exit {}): stdout={:?} stderr={:?}",
                 out.status.code().unwrap_or(-1),
@@ -277,54 +269,9 @@ impl LaunchctlClient for RealLaunchctl {
     }
 }
 
-/// Test impl — records calls; never invokes real launchctl.
-/// `pub` to allow future lib-target integration tests to import directly.
-/// Silenced: pub API not yet constructed in production binary by design.
-#[derive(Debug, Default)]
-#[allow(dead_code)]
-pub struct NoopLaunchctl {
-    pub bootstrap_calls: std::sync::Mutex<Vec<PathBuf>>,
-    pub bootout_calls: std::sync::Mutex<Vec<String>>,
-}
-
-impl LaunchctlClient for NoopLaunchctl {
-    fn bootstrap(&self, plist_path: &Path) -> Result<()> {
-        self.bootstrap_calls
-            .lock()
-            .unwrap()
-            .push(plist_path.to_path_buf());
-        Ok(())
-    }
-
-    fn bootout(&self, label: &str) -> Result<()> {
-        self.bootout_calls.lock().unwrap().push(label.to_string());
-        Ok(())
-    }
-
-    fn print(&self, _label: &str) -> Result<LaunchctlPrintOutput> {
-        // Canned output matches macOS 15 launchctl format (Worker Turn 1 captured fixture).
-        Ok(LaunchctlPrintOutput {
-            raw_stdout: "gui/501/com.advisorycron.test = {\n\
-                \tstate = not running\n\
-                \tevent triggers = {\n\
-                \t\tcom.advisorycron.test.268435522 => {\n\
-                \t\t\tstream = com.apple.launchd.calendarinterval\n\
-                \t\t\tdescriptor = {\n\
-                \t\t\t\t\"Minute\" => 0\n\
-                \t\t\t\t\"Hour\" => 9\n\
-                \t\t\t}\n\
-                \t\t}\n\
-                \t}\n\
-                }"
-            .to_string(),
-            not_loaded: false,
-        })
-    }
-}
-
 /// Resolve current UID via POSIX `id -u`. Zero-unsafe alternative to `libc::getuid()`.
 /// Sub-100ms cost — acceptable for one-shot register/unregister CLI ops.
-pub fn current_uid() -> Result<u32> {
+fn current_uid() -> Result<u32> {
     let out = Command::new("id")
         .arg("-u")
         .output()
@@ -340,11 +287,159 @@ pub fn current_uid() -> Result<u32> {
         .with_context(|| format!("failed to parse UID from `id -u` output: {s:?}"))
 }
 
+/// Inline INV-12 check — keeps validation local to scheduler::macos defense-in-depth.
+fn is_valid_label_inline(label: &str) -> bool {
+    !label.is_empty()
+        && label
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Adapter — bridges Phase 1 `generate_plist(config, label, self_exe)` to Phase 3 intent shape.
+/// Builds a synthetic `Config` for the plist generator (which currently reads `config.task.working_dir`
+/// + `config.schedule`). Keeps the move strictly mechanical — no rewrite of `generate_plist` body.
+fn generate_plist_from_intent(intent: &RegisterIntent) -> Result<String> {
+    use crate::config::{HeartbeatConfig, ScheduleConfig, TaskConfig};
+    let synthetic = Config {
+        task: TaskConfig {
+            command: String::new(), // unused by generate_plist
+            args: Vec::new(),       // unused
+            working_dir: intent.working_dir.clone(),
+            label: None,
+        },
+        schedule: ScheduleConfig::Calendar {
+            hour: intent.hour,
+            minute: intent.minute,
+        },
+        heartbeat: HeartbeatConfig {
+            log_path: PathBuf::new(), // unused
+        },
+        alert: None,
+        retry: None,
+    };
+    generate_plist(&synthetic, &intent.label, &intent.self_exe)
+}
+
+// ---- MacosScheduler ----
+
+/// Production macOS scheduler. Wraps `RealLaunchctl` + plist generation.
+/// `Default`-derived: `MacosScheduler::default()` is the zero-arg constructor.
+#[derive(Debug, Default)]
+pub struct MacosScheduler;
+
+impl Scheduler for MacosScheduler {
+    fn register(&self, intent: &RegisterIntent) -> Result<RegisterReport> {
+        use crate::core::config_path::home_dir;
+        let home = home_dir().context("failed to resolve $HOME")?;
+        let launch_agents_dir = default_launch_agents_dir(&home);
+        fs::create_dir_all(&launch_agents_dir)
+            .with_context(|| format!("failed to create {}", launch_agents_dir.display()))?;
+
+        // Generate plist XML — moved from core::register::run.
+        let plist_xml = generate_plist_from_intent(intent)?;
+
+        let plist_path = plist_path_for(&intent.label, &launch_agents_dir);
+        fs::write(&plist_path, &plist_xml)
+            .with_context(|| format!("failed to write plist to {}", plist_path.display()))?;
+
+        RealLaunchctl
+            .bootstrap(&plist_path)
+            .context("launchctl bootstrap failed")?;
+
+        Ok(RegisterReport {
+            plist_path: Some(plist_path),
+        })
+    }
+
+    fn unregister(&self, label: &str) -> Result<UnregisterReport> {
+        // Defense-in-depth label validation (INV-12).
+        if !is_valid_label_inline(label) {
+            anyhow::bail!("invalid label {label:?} — must be ASCII alphanumeric + '-' + '_'");
+        }
+        use crate::core::config_path::home_dir;
+        let home = home_dir().context("failed to resolve $HOME")?;
+        let launch_agents_dir = default_launch_agents_dir(&home);
+        let plist_path = plist_path_for(label, &launch_agents_dir);
+        let plist_existed = plist_path.exists();
+
+        let was_loaded = RealLaunchctl.bootout(label).is_ok();
+
+        match fs::remove_file(&plist_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(e).with_context(|| {
+                    format!("failed to remove plist at {}", plist_path.display())
+                });
+            }
+        }
+        Ok(UnregisterReport {
+            was_registered: plist_existed || was_loaded,
+        })
+    }
+
+    fn status(&self, label: &str) -> Result<SchedulerStatus> {
+        let print_out = RealLaunchctl.print(label)?;
+        Ok(SchedulerStatus {
+            is_registered: !print_out.not_loaded,
+            raw_descriptor: if print_out.not_loaded {
+                None
+            } else {
+                Some(print_out.raw_stdout)
+            },
+        })
+    }
+}
+
+// ---- Tests (moved verbatim from src/launchd.rs + new MacosScheduler tests) ----
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{HeartbeatConfig, TaskConfig};
     use std::path::PathBuf;
+
+    // Noop impl for tests inside this module (private).
+    #[derive(Debug, Default)]
+    struct NoopLaunchctl {
+        bootstrap_calls: std::sync::Mutex<Vec<PathBuf>>,
+        bootout_calls: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl LaunchctlClient for NoopLaunchctl {
+        fn bootstrap(&self, plist_path: &Path) -> Result<()> {
+            self.bootstrap_calls
+                .lock()
+                .unwrap()
+                .push(plist_path.to_path_buf());
+            Ok(())
+        }
+
+        fn bootout(&self, label: &str) -> Result<()> {
+            self.bootout_calls.lock().unwrap().push(label.to_string());
+            Ok(())
+        }
+
+        fn print(&self, _label: &str) -> Result<LaunchctlPrintOutput> {
+            // Canned output matches macOS 15 launchctl format (Worker Turn 1 captured fixture).
+            Ok(LaunchctlPrintOutput {
+                raw_stdout: "gui/501/com.advisorycron.test = {\n\
+                    \tstate = not running\n\
+                    \tevent triggers = {\n\
+                    \t\tcom.advisorycron.test.268435522 => {\n\
+                    \t\t\tstream = com.apple.launchd.calendarinterval\n\
+                    \t\t\tdescriptor = {\n\
+                    \t\t\t\t\"Minute\" => 0\n\
+                    \t\t\t\t\"Hour\" => 9\n\
+                    \t\t\t}\n\
+                    \t\t}\n\
+                    \t}\n\
+                    }"
+                .to_string(),
+                not_loaded: false,
+            })
+        }
+    }
 
     fn sample_config_calendar() -> Config {
         Config {
@@ -354,7 +449,7 @@ mod tests {
                 working_dir: PathBuf::from("/Users/test"),
                 label: None,
             },
-            schedule: ScheduleConfig::Calendar { hour: 9, minute: 0 },
+            schedule: crate::config::ScheduleConfig::Calendar { hour: 9, minute: 0 },
             heartbeat: HeartbeatConfig {
                 log_path: PathBuf::from("/Users/test/.local/state/advisory-cron/heartbeat.jsonl"),
             },
@@ -365,7 +460,7 @@ mod tests {
 
     fn sample_config_cron(expr: &str) -> Config {
         let mut c = sample_config_calendar();
-        c.schedule = ScheduleConfig::Cron { cron: expr.into() };
+        c.schedule = crate::config::ScheduleConfig::Cron { cron: expr.into() };
         c
     }
 
@@ -493,7 +588,7 @@ mod tests {
 
     #[test]
     fn noop_launchctl_print_returns_canned_descriptor_output() {
-        let client = NoopLaunchctl::default(); // V2 fix: unit struct uses Default
+        let client = NoopLaunchctl::default();
         let result = client.print("test-label").expect("noop never fails");
         assert!(!result.not_loaded);
         // V2: assert descriptor Hour/Minute keys present (macOS 15 format)
@@ -503,7 +598,7 @@ mod tests {
 
     #[test]
     fn real_launchctl_print_rejects_invalid_label() {
-        let client = RealLaunchctl; // V2 fix: unit struct, no ::new()
+        let client = RealLaunchctl;
         let result = client.print("../etc/passwd");
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -512,8 +607,26 @@ mod tests {
 
     #[test]
     fn real_launchctl_print_rejects_empty_label() {
-        let client = RealLaunchctl; // V2 fix: unit struct, no ::new()
+        let client = RealLaunchctl;
         let result = client.print("");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn macos_scheduler_unregister_rejects_invalid_label() {
+        let s = MacosScheduler;
+        let result = s.unregister("../etc/passwd");
+        assert!(result.is_err());
+        let msg = format!("{result:#}");
+        assert!(msg.contains("invalid label"), "got: {msg}");
+    }
+
+    #[test]
+    fn macos_scheduler_status_rejects_invalid_label_via_real_launchctl() {
+        let s = MacosScheduler;
+        let result = s.status("../etc/passwd");
+        assert!(result.is_err());
+        let msg = format!("{result:#}");
+        assert!(msg.contains("invalid label"), "got: {msg}");
     }
 }

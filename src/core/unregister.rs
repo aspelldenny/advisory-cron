@@ -1,16 +1,19 @@
-//! Core unregister logic — bootout launchd job + remove plist.
+//! Core unregister logic — delegate to Scheduler.
 //!
 //! Pure business logic, no CLI or MCP concerns. Both `cli::unregister` and `mcp::tools`
 //! call this. Satisfies ARCHITECTURE.md §Layering invariant.
 //!
 //! V2 (per Architect Turn 1 RESPOND [O1.3] ACCEPT):
-//! - Resolves `home`, `launch_agents_dir` internally.
-//! - ONLY `&L: LaunchctlClient` is injected.
+//! - Resolves `home`, `launch_agents_dir` internally (now inside Scheduler impl).
+//! - ONLY `&S: Scheduler` is injected.
+//!
+//! Phase 3.1 (P012): generic `<L: LaunchctlClient>` → `<S: Scheduler>`.
+//! `UnregisterOutput` keeps both `plist_existed` + `was_loaded` fields populated from
+//! `was_registered` (minimum-disruption refactor — MCP JSON schema stable).
 
-use crate::core::config_path::home_dir;
-use crate::launchd::{LaunchctlClient, default_launch_agents_dir, plist_path_for};
-use anyhow::{Context, Result};
-use std::{fs, io, path::PathBuf};
+use crate::scheduler::Scheduler;
+use anyhow::Result;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct UnregisterArgs {
@@ -37,9 +40,13 @@ pub fn is_valid_label(label: &str) -> bool {
 }
 
 /// V2 (per Architect Turn 1 RESPOND [O1.3] ACCEPT):
-/// - Resolves home + launch_agents_dir internally.
-/// - Idempotent: "not loaded" + "plist not found" are NOT errors.
-pub fn run<L: LaunchctlClient>(args: UnregisterArgs, client: &L) -> Result<UnregisterOutput> {
+/// - Resolves home + OS-specific unregister logic inside scheduler.
+/// - Idempotent: "not loaded" + "plist not found" are NOT errors (scheduler handles).
+///
+/// Phase 3.1: delegates to `scheduler.unregister()`.
+/// `UnregisterOutput.plist_existed` + `was_loaded` both populated from `was_registered`
+/// for backwards-compat: cli/unregister.rs:44,:49 warning render still triggers.
+pub fn run<S: Scheduler>(args: UnregisterArgs, scheduler: &S) -> Result<UnregisterOutput> {
     // 1. Validate label (INV-12).
     if !is_valid_label(&args.label) {
         anyhow::bail!(
@@ -48,46 +55,28 @@ pub fn run<L: LaunchctlClient>(args: UnregisterArgs, client: &L) -> Result<Unreg
         );
     }
 
-    // 2. Resolve home + launch_agents_dir internally.
-    let home = home_dir().context("failed to resolve $HOME")?;
-    let launch_agents_dir = default_launch_agents_dir(&home);
-
-    // 3. Check plist existence before attempting removal.
-    let plist_path = plist_path_for(&args.label, &launch_agents_dir);
-    let plist_existed = plist_path.exists();
-
-    // 4. Attempt bootout. Any Err is treated as warn-continue (idempotency).
-    let was_loaded = match client.bootout(&args.label) {
-        Ok(()) => true,
-        Err(_) => {
-            // Label not loaded or already unloaded — continue to plist removal.
-            false
-        }
-    };
-
-    // 5. Remove plist. NotFound → warn, continue. Other IO → Err.
-    match fs::remove_file(&plist_path) {
-        Ok(()) => {}
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            // File already absent — idempotent, not an error.
-        }
-        Err(e) => {
-            return Err(e)
-                .with_context(|| format!("failed to remove plist at {}", plist_path.display()));
-        }
-    }
+    // 2. Delegate to scheduler.
+    let report = scheduler
+        .unregister(&args.label)
+        .context("scheduler unregister failed")?;
 
     Ok(UnregisterOutput {
         label: args.label,
-        plist_existed,
-        was_loaded,
+        // Phase 3.1: collapse `plist_existed` + `was_loaded` → `was_registered`.
+        // Backwards-compat: populate both old fields from `was_registered` so CLI render
+        // (cli/unregister.rs:44, :49 — warning messages) still triggers.
+        plist_existed: report.was_registered,
+        was_loaded: report.was_registered,
     })
 }
+
+// Pull in Context trait for `.context()` usage above.
+use anyhow::Context;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::launchd::NoopLaunchctl;
+    use crate::scheduler::NoopScheduler;
     use tempfile::TempDir;
 
     #[test]
@@ -96,16 +85,17 @@ mod tests {
         unsafe {
             std::env::set_var("HOME", dir.path());
         }
-        let client = NoopLaunchctl::default();
+        let scheduler = NoopScheduler::default();
         let result = run(
             UnregisterArgs {
                 label: "test-label".to_string(),
                 config_path: None,
             },
-            &client,
+            &scheduler,
         );
         assert!(result.is_ok(), "expected Ok, got {result:?}");
         let output = result.unwrap();
+        // NoopScheduler::unregister returns was_registered=false → plist_existed=false
         assert!(!output.plist_existed);
     }
 
@@ -115,13 +105,13 @@ mod tests {
         unsafe {
             std::env::set_var("HOME", dir.path());
         }
-        let client = NoopLaunchctl::default();
+        let scheduler = NoopScheduler::default();
         let result = run(
             UnregisterArgs {
                 label: "bad label!".to_string(),
                 config_path: None,
             },
-            &client,
+            &scheduler,
         );
         assert!(result.is_err());
     }

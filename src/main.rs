@@ -8,9 +8,9 @@ mod cli;
 mod config;
 mod core;
 mod heartbeat;
-mod launchd;
 mod mcp;
 mod runner;
+mod scheduler;
 
 use clap::Parser;
 use std::process::ExitCode;

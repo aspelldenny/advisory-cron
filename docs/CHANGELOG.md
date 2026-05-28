@@ -6,6 +6,31 @@
 
 ---
 
+## 2026-05-28 — P012: Phase 3.1 — Scheduler trait abstract
+
+**Phiếu:** P012 (Tầng 1 — refactor, module add/remove)
+
+**Scope:** Extract `LaunchctlClient` trait from `src/launchd.rs` → cross-OS `Scheduler` trait in `src/scheduler/{mod,macos,linux}.rs`. Zero behavior change macOS. Linux stub compiles.
+
+**Changes:**
+- **CREATE** `src/scheduler/mod.rs`: `Scheduler` trait + `RegisterIntent`/`RegisterReport`/`UnregisterReport`/`SchedulerStatus` types + `NoopScheduler` (test impl) + `PlatformScheduler` compile-time alias.
+- **CREATE** `src/scheduler/macos.rs`: `MacosScheduler` implements `Scheduler`. Content moved verbatim from `src/launchd.rs`. `RealLaunchctl` + `LaunchctlClient` now private to this module. Gated `#[cfg(target_os = "macos")]`.
+- **CREATE** `src/scheduler/linux.rs`: `CrontabScheduler` stub (bails `"Phase 3.2 (P013) chưa ship"`). Gated `#[cfg(target_os = "linux")]`.
+- **DELETE** `src/launchd.rs` — all content moved to `src/scheduler/macos.rs`.
+- **EDIT** `src/main.rs`, `src/core/{register,unregister,status}.rs`, `src/mcp/tools.rs`, `src/cli/{register,unregister,status}.rs` — `LaunchctlClient` → `Scheduler`, `RealLaunchctl` → `PlatformScheduler`, `NoopLaunchctl` → `NoopScheduler`.
+- **EDIT** `tests/cli_register.rs` — 4 launchctl-invoking tests gated `#[cfg(target_os = "macos")]` to keep Linux CI green.
+
+**No schema change, no dep change, no CLI surface change.**
+- `StatusReport.plist_loaded` field name preserved (JSON schema stability — anchor #17).
+- `UnregisterOutput.plist_existed` + `was_loaded` both populated from `was_registered` (minimum-disruption refactor).
+- INV-10/11/12/13/17 enforcement points preserved (move-not-rewrite).
+
+**Tests:** 129 pass on Linux WSL2 (97 lib + 32 integration). Baseline was 144 on macOS; delta = -11 macOS-only lib tests (now compile-gated in scheduler/macos.rs) + -4 macOS-only integration tests + +3 new Linux scheduler stub tests. macOS CI will see 144+3=147 total.
+
+**Linux build evidence:** `cargo build --release` on Linux WSL2 → 4.7MB binary, zero warnings, zero errors.
+
+---
+
 ## 2026-05-27 — P011: Sprint debt cleanup (Tầng 2 — INV-12 + DISCOVERIES hook align)
 
 **Phiếu:** P011 (Tầng 2 — 2 items from "Open backlog" cleared; item 3 `fire_task` no-timeout deferred to separate Tầng 1 phiếu)
