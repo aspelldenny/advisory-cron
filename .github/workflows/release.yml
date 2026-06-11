@@ -1,0 +1,43 @@
+# Release CI — prebuilt binaries for the sos-kit "1 lệnh" installer (sos-kit P064).
+# Trigger: push a tag `v*` (e.g. v0.1.0). Builds the 3 ratified targets
+# (mac-arm64 / linux-x64 / win-x64) and attaches them to a GitHub Release.
+# Asset naming contract (consumed by sos-kit install.sh): <bin>-<target-triple>[.exe]
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: x86_64-pc-windows-msvc
+            os: windows-2022
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo build --release --target ${{ matrix.target }}
+      - name: Package asset
+        shell: bash
+        run: |
+          BIN=advisory-cron
+          EXT=""
+          [[ "${{ matrix.target }}" == *windows* ]] && EXT=".exe"
+          cp "target/${{ matrix.target }}/release/${BIN}${EXT}" "${BIN}-${{ matrix.target }}${EXT}"
+          echo "ASSET=${BIN}-${{ matrix.target }}${EXT}" >> "$GITHUB_ENV"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ASSET }}

@@ -6,6 +6,10 @@
 
 ---
 
+## release-ci — 3-target prebuilt binaries for sos-kit installer (P064) — 2026-06-11
+
+- `.github/workflows/release.yml`: tag `v*` builds mac-arm64/linux-x64/win-x64, attaches to GitHub Release. Asset contract `<bin>-<triple>[.exe]` consumed by sos-kit `install.sh`.
+
 ## 2026-05-28 — P015: Phase 3.4 — README Linux quick-start (SPRINT CLOSE)
 
 **Phiếu:** P015 (Tầng 2 — README.md only)
