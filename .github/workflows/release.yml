@@ -21,8 +21,8 @@ jobs:
             os: macos-14
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
-          - target: x86_64-pc-windows-msvc
-            os: windows-2022
+          # NO windows target: src/scheduler/mod.rs compile_error! — Phase 3 = macOS+Linux
+          # only (launchd/cron). Add back when a Windows Task Scheduler phase ships.
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
