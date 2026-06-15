@@ -156,6 +156,7 @@ fn xml_escape(s: &str) -> String {
 
 /// Output of `launchctl print gui/<uid>/com.advisorycron.<label>`.
 /// Returned by `RealLaunchctl::print`. Internal to this module.
+#[derive(Debug)]
 struct LaunchctlPrintOutput {
     /// Full stdout captured from launchctl. Caller parses for "Hour"/"Minute"
     /// keys inside the `descriptor` block (V2 spec — macOS 15 launchctl does
@@ -609,7 +610,7 @@ mod tests {
         let s = MacosScheduler;
         let result = s.unregister("../etc/passwd");
         assert!(result.is_err());
-        let msg = format!("{result:#}");
+        let msg = format!("{:#}", result.unwrap_err());
         assert!(msg.contains("invalid label"), "got: {msg}");
     }
 
@@ -618,7 +619,7 @@ mod tests {
         let s = MacosScheduler;
         let result = s.status("../etc/passwd");
         assert!(result.is_err());
-        let msg = format!("{result:#}");
+        let msg = format!("{:#}", result.unwrap_err());
         assert!(msg.contains("invalid label"), "got: {msg}");
     }
 }

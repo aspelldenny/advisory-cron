@@ -6,6 +6,12 @@
 
 ---
 
+## fix(test): compile errors in scheduler test code — 2026-06-15
+
+- `LaunchctlPrintOutput`: added `#[derive(Debug)]` (required by `unwrap_err()` which bounds `T: Debug`).
+- Two test functions used `format!("{result:#}")` on `Result<T, E>` which has no `Display` impl; fixed by extracting the error via `result.unwrap_err()` before formatting.
+- All 150 tests now pass (`cargo test --all`). CI was red since 2026-06-11.
+
 ## release-ci — node24 actions + draft/publish + sha256 (P072) — 2026-06-15
 
 - Release CI: `actions/checkout@v4→v5`, `action-gh-release@v2→v3` with draft/publish split, `github-script@v8`, sha256 checksums, `prerelease` conditional. Preserves 2-target matrix (mac+linux, no Windows). P071+P072 combined for optionals.
