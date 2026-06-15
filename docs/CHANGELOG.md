@@ -6,6 +6,10 @@
 
 ---
 
+## release-ci — node24 actions + draft/publish + sha256 (P072) — 2026-06-15
+
+- Release CI: `actions/checkout@v4→v5`, `action-gh-release@v2→v3` with draft/publish split, `github-script@v8`, sha256 checksums, `prerelease` conditional. Preserves 2-target matrix (mac+linux, no Windows). P071+P072 combined for optionals.
+
 ## release-ci — 3-target prebuilt binaries for sos-kit installer (P064) — 2026-06-11
 
 - `.github/workflows/release.yml`: tag `v*` builds mac-arm64/linux-x64/win-x64, attaches to GitHub Release. Asset contract `<bin>-<triple>[.exe]` consumed by sos-kit `install.sh`. Matrix = mac-arm64 + linux-x64 ONLY (Phase 3 `compile_error!` gates Windows out by design — installer marks advisory-cron optional).
