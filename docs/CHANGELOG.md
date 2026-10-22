@@ -6,6 +6,11 @@
 
 ---
 
+## fix(deps): rustls-webpki 0.103.16 + webpki-roots 1.0.10 (eMudhra distrust) — 2026-10-22
+
+- Cargo.lock only: `rustls-webpki` 0.103.13 → 0.103.16 (RUSTSEC-2026-0382), `webpki-roots` 1.0.7 → 1.0.10 (RUSTSEC-2026-0381), both CVE-2026-111943 (compromised emSign intermediates).
+- `cargo test --workspace`: 150 passed.
+
 ## fix(test): compile errors in scheduler test code — 2026-06-15
 
 - `LaunchctlPrintOutput`: added `#[derive(Debug)]` (required by `unwrap_err()` which bounds `T: Debug`).
